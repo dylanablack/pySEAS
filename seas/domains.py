@@ -25,7 +25,9 @@ def get_domain_map(components: dict,
                    max_loops: int = 2,
                    ignore_small: bool = True):
     '''
-    Creates a domain map from extracted independent components.  A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.  Components with multiple noncontiguous significant regions are counted as two distinct domains.
+    Creates a domain map from extracted independent components.
+    A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.
+    Components with multiple noncontiguous significant regions are counted as two distinct domains.
 
     Arguments:
         components: 
@@ -232,7 +234,7 @@ def get_domain_map(components: dict,
 
 def save_domain_map(domain_ROIs: np.ndarray,
                     basepath: str,
-                    blur_level: int,
+                    blur_level: int = None,
                     n_rotations: int = 0):
     '''
     Saves domain maps to pngs for visualization.  Two files are saved to basepath_xb.png and basepath_xb_edges.png. One is the visualization of the domain indices, saved in black and white, the other is just the edge visualization.
