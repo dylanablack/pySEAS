@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import matplotlib
+import matplotlib.pyplot as plt
 import tkinter as tk
 import tkinter.messagebox
 
@@ -233,7 +234,7 @@ def run_gui(components: dict,
 
             filemenu = tk.Menu(menubar, tearoff=0)
             filemenu.add_separator()
-            filemenu.add_command(label='save', command=self.quit)
+            filemenu.add_command(label='save', command=self.close)
             filemenu.add_command(label='exit',
                                  command=lambda: self.cancelcallback(toggle))
             menubar.add_cascade(label='file', menu=filemenu)
@@ -319,7 +320,11 @@ def run_gui(components: dict,
             # Quits the app, doesn't rebuild the movie.
             print('Operation was cancelled.')
             toggle[0] = 100
+            self.close()
+            
+        def close(self):
             self.quit()
+            self.destroy()
 
     # Create each frame and components as individual classes:
     class ComponentPage(tk.Frame):
@@ -1609,7 +1614,7 @@ def run_gui(components: dict,
     # Run main loop.
     app = AnalysisGui()
     app.mainloop()
-    app.quit()
+    plt.close('all')
 
     # Find which indices to use for reconstruction.
     if toggle[0] == 100:
