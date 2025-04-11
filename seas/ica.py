@@ -472,7 +472,7 @@ def filter_mean(mean: np.ndarray,
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'wavelet':
-        wavelet = waveletAnalysis(mean.astype('float64'), fps=10)
+        wavelet = waveletAnalysis(mean.astype('float64'), fps=7.5)
         mean_filtered = wavelet.noiseFilter(upperPeriod=1 / low_cutoff)
 
     else:

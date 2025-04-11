@@ -28,7 +28,7 @@ import operator
 
 class waveletAnalysis:
 
-    def __init__(self, data: np.ndarray, fps: int, **kwargs):
+    def __init__(self, data: np.ndarray, fps: float, **kwargs):
         """
         A class for managing wavelet analysis. 
         Initialize the wavelet parameters and run the wavelet tranform.

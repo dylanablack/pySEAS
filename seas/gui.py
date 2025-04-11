@@ -691,7 +691,7 @@ def run_gui(components: dict,
 
                 # Wavelet analysis:
                 wavelet = waveletAnalysis(self.timecourse.astype('float64'),
-                                          fps=10,
+                                          fps=7.5,
                                           siglvl=0.95)
 
                 # Dict to store all info for updating figures.
