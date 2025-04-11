@@ -121,7 +121,7 @@ def lag_n_autocorr(x: np.ndarray, n: int, verbose: bool = True):
 def butterworth(data: np.ndarray,
                 high: float = None,
                 low: float = None,
-                fps: int = 10,
+                fps: int = 7.5,
                 order: int = 5) -> np.ndarray:
     '''
     Apply a butterworth filter on the data.
