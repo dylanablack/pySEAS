@@ -149,6 +149,17 @@ def butterworth(data: np.ndarray,
         b, a = signal.butter(order, normal_cutoff, btype='low', analog=False)
         return b, a
 
+    def butter_bandpass(low_cutoff, high_cutoff, fps, order=order):
+        nyq = 0.5 * fps
+        normal_low_cutoff = low_cutoff / nyq
+        normal_high_cutoff = high_cutoff / nyq
+        b, a = signal.butter(order, [normal_low_cutoff, normal_high_cutoff], btype='bandpass', analog=False)
+        return b, a
+
+    if low is not None and high is not None:
+        b, a = butter_bandpass(low, high, fps, order=order)
+        data = signal.filtfilt(b, a, data)
+
     if low is not None:
         b, a = butter_highpass(low, fps, order=order)
         data = signal.filtfilt(b, a, data)
