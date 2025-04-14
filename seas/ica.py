@@ -136,7 +136,7 @@ def project(vector: np.ndarray,
 
             w_init = u[:n_components, :n_components].astype('float64')
             ica = FastICA(n_components=n_components,
-                          max_iter=500,
+                          max_iter=1000,
                           random_state=1000,
                           w_init=w_init)
 
@@ -207,7 +207,7 @@ def project(vector: np.ndarray,
         print('Calculating ICA (' + str(n_components) + ' components)...')
 
         t0 = timer()
-        ica = FastICA(n_components=n_components, max_iter=500, random_state=1000)
+        ica = FastICA(n_components=n_components, max_iter=1000, random_state=1000)
 
         try:
             eig_vec = ica.fit_transform(vector)  # Eigenbrains
