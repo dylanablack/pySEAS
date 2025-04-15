@@ -431,7 +431,7 @@ def mosaic_movie(domain_ROIs: np.ndarray,
                  resize_factor: int = 1,
                  codec: str = None,
                  speed: int = 1,
-                 fps: int = 10):
+                 fps: float = 7.5):
     '''
     Creates a mosaic movie, where the original movie is played back as a series of domain timecourses, each displayed over its original domain.
 
@@ -495,8 +495,8 @@ def mosaic_movie(domain_ROIs: np.ndarray,
              colormap=colormap,
              resize_factor=1,
              codec=None,
-             speed=1,
-             fps=10)
+             speed=speed,
+             fps=fps)
 
 
 def rolling_mosaic_movie(domain_ROIs: np.ndarray,
@@ -509,7 +509,7 @@ def rolling_mosaic_movie(domain_ROIs: np.ndarray,
                          resize_factor: int = 1,
                          codec: str = None,
                          speed: int = 1,
-                         fps: int = 10):
+                         fps: float = 7.5):
     '''
     A low memory version of mosaic_movie.  The functionality is the same, except each frame is written one at at a time.  Movie scale values may be slightly different, since they are calculated from the first frame instead of on the entire movie.
 
