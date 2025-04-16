@@ -446,7 +446,8 @@ def approximate_svd_linearity_transition(eig_val: np.ndarray):
 
 def filter_mean(mean: np.ndarray,
                 filter_method: str = 'wavelet',
-                low_cutoff: float = 0.5):
+                low_cutoff: float = 0.5,
+                high_cutoff: float = 1.0):
     '''
     Applies a high pass filtration to the ica mean signal.
 
@@ -462,22 +463,30 @@ def filter_mean(mean: np.ndarray,
     Returns:
         mean_filtered: The filtered mean.
     '''
-    print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
     print('Filter method:', filter_method)
 
     if filter_method == 'butterworth':
+        print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         variance = mean.var()
         mean_filtered = butterworth(mean, low=low_cutoff)
         percent_variance = np.round(mean.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
+    elif filter_method == 'butterworth_bandpass':
+        print('Bandpass filter signal timecourse: ' + str(low_cutoff) + 'Hz to ' + str(high_cutoff) + 'Hz')
+        variance = mean.var()
+        mean_filtered = butterworth(mean, low=low_cutoff, high=high_cutoff)
+        percent_variance = np.round(mean.var() / variance * 100)
+        print(str(percent_variance) + '% variance retained')
+
     elif filter_method == 'wavelet':
+        print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         wavelet = waveletAnalysis(mean.astype('float64'), fps=7.5)
         mean_filtered = wavelet.noiseFilter(upperPeriod=1 / low_cutoff)
 
     else:
         raise Exception("Filter method '" + str(filter_method)\
-         + "' not supported!\n\t Supported methods: butterworth, wavelet")
+         + "' not supported!\n\t Supported methods: butterworth, butterworth_bandpass, wavelet")
 
     return mean_filtered
 
