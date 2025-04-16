@@ -472,6 +472,13 @@ def filter_mean(mean: np.ndarray,
         percent_variance = np.round(mean.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
+    elif filter_method == 'butterworth_lowpass':
+        print('Lowpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
+        variance = mean.var()
+        mean_filtered = butterworth(mean, high=low_cutoff)
+        percent_variance = np.round(mean.var() / variance * 100)
+        print(str(percent_variance) + '% variance retained')
+
     elif filter_method == 'butterworth_bandpass':
         print('Bandpass filter signal timecourse: ' + str(low_cutoff) + 'Hz to ' + str(high_cutoff) + 'Hz')
         variance = mean.var()
