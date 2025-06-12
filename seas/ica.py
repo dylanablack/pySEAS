@@ -18,7 +18,8 @@ def project(vector: np.ndarray,
             roimask: np.ndarray = None,
             n_components: int = None,
             svd_multiplier: float = 5,
-            calc_residuals: bool = True):
+            calc_residuals: bool = True,
+            max_iter: int = 1000):
     '''
     Apply an ica decomposition to the first axis of the input vector.  
     If a roimask is provided, the flattened roimask will be used to crop the vector before decomposition.
@@ -43,6 +44,8 @@ def project(vector: np.ndarray,
             The hyperparameter for svd adaptive thresholding.
         calc_residuals:
             Whether to calculate spatial and temporal residuals of projection compression.
+        max_iter:
+            Maximum iterations assigned for FastICA
 
     Returns:
         components: A dictionary containing all the results, metadata, and information regarding the filter applied.
@@ -136,7 +139,7 @@ def project(vector: np.ndarray,
 
             w_init = u[:n_components, :n_components].astype('float64')
             ica = FastICA(n_components=n_components,
-                          max_iter=1000,
+                          max_iter=max_iter,
                           random_state=1000,
                           w_init=w_init)
 
@@ -207,7 +210,7 @@ def project(vector: np.ndarray,
         print('Calculating ICA (' + str(n_components) + ' components)...')
 
         t0 = timer()
-        ica = FastICA(n_components=n_components, max_iter=1000, random_state=1000)
+        ica = FastICA(n_components=n_components, max_iter=max_iter, random_state=1000)
 
         try:
             eig_vec = ica.fit_transform(vector)  # Eigenbrains
@@ -290,6 +293,7 @@ def rebuild(components: dict,
             t_stop: int = None,
             apply_mean_filter: bool = True,
             filter_method: str = 'wavelet',
+            fps: float = 7.5,
             include_noise: bool = True):
     '''
     Rebuild original vector space based on a subset of principal 
@@ -391,7 +395,7 @@ def rebuild(components: dict,
                     eig_mix[t_start:t_stop, reconstruct_indices].T).T
 
     if apply_mean_filter:
-        mean_filtered = filter_mean(mean, filter_method)
+        mean_filtered = filter_mean(mean, filter_method, fps=fps)
         data_r += mean_filtered[t_start:t_stop, None]
 
     else:
@@ -446,6 +450,7 @@ def approximate_svd_linearity_transition(eig_val: np.ndarray):
 
 def filter_mean(mean: np.ndarray,
                 filter_method: str = 'wavelet',
+                fps: float = 7.5,
                 low_cutoff: float = 0.5,
                 high_cutoff: float = 1.0):
     '''
@@ -468,27 +473,27 @@ def filter_mean(mean: np.ndarray,
     if filter_method == 'butterworth':
         print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         variance = mean.var()
-        mean_filtered = butterworth(mean, low=low_cutoff)
+        mean_filtered = butterworth(mean, fps=fps, low=low_cutoff)
         percent_variance = np.round(mean.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'butterworth_lowpass':
         print('Lowpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         variance = mean.var()
-        mean_filtered = butterworth(mean, high=low_cutoff)
+        mean_filtered = butterworth(mean, fps=fps, high=low_cutoff)
         percent_variance = np.round(mean.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'butterworth_bandpass':
         print('Bandpass filter signal timecourse: ' + str(low_cutoff) + 'Hz to ' + str(high_cutoff) + 'Hz')
         variance = mean.var()
-        mean_filtered = butterworth(mean, low=low_cutoff, high=high_cutoff)
+        mean_filtered = butterworth(mean, fps=fps, low=low_cutoff, high=high_cutoff)
         percent_variance = np.round(mean.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'wavelet':
         print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
-        wavelet = waveletAnalysis(mean.astype('float64'), fps=7.5)
+        wavelet = waveletAnalysis(mean.astype('float64'), fps=fps)
         mean_filtered = wavelet.noiseFilter(upperPeriod=1 / low_cutoff)
 
     else:
