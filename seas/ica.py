@@ -230,10 +230,20 @@ def project(vector: np.ndarray,
         eig_vec = eig_vec[:, ev_sort][:, ::-1]
         eig_mix = eig_mix[:, ev_sort][:, ::-1]
 
+        # Track component orientation and ensure positive spatial patterns
+        flipped = np.ones(n_components)
+        for i in range(n_components):
+            # Find the index of maximum absolute value
+            max_idx = np.argmax(np.abs(eig_vec[:, i]))
+            # If that maximum value is negative, flip the component
+            if eig_vec[max_idx, i] < 0:
+                eig_vec[:, i] *= -1
+                eig_mix[:, i] *= -1
+                flipped[i] = -1
         noise, cutoff = sort_noise(eig_mix.T)
         components['noise_components'] = noise
         components['cutoff'] = cutoff
-
+        components['flipped'] = flipped
     print('components shape:', eig_vec.shape)
 
     components['eig_mix'] = eig_mix
