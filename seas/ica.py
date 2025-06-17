@@ -240,10 +240,12 @@ def project(vector: np.ndarray,
                 eig_vec[:, i] *= -1
                 eig_mix[:, i] *= -1
                 flipped[i] = -1
+                
         noise, cutoff = sort_noise(eig_mix.T)
         components['noise_components'] = noise
         components['cutoff'] = cutoff
         components['flipped'] = flipped
+
     print('components shape:', eig_vec.shape)
 
     components['eig_mix'] = eig_mix
