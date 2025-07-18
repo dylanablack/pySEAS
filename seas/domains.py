@@ -712,7 +712,7 @@ def threshold_by_domains(components: dict,
                 eig_vec.T[index] = blurred.flat
 
     # This is the money section, return indices across each eig_vec (loading vector for component) where loading is max
-    domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1).astype('float16')
+    domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
     # Then threshold by clearing eig_vec outside of max indices
     mask = np.zeros_like(eig_vec, dtype=bool)
     mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
