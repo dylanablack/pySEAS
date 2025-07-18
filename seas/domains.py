@@ -720,6 +720,8 @@ def threshold_by_domains(components: dict,
 
     output['eig_vec'] = eig_vec
 
+    return output
+
     # if blur:
     #     domain_ROIs_vector[np.isnan(eig_vec[:, 0])] = np.nan
 
