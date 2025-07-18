@@ -689,7 +689,7 @@ def threshold_by_domains(components: dict,
         else:
             print('no noise components found')
             signal_indices = np.where(artifact_components == 0)[0]
-        eig_vec = eig_vec[:, signal_indices]
+        # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
 
     if blur:
         print('blurring domains...')
