@@ -433,7 +433,7 @@ def mosaic_movie(domain_ROIs: np.ndarray,
                  resize_factor: int = 1,
                  codec: str = None,
                  speed: int = 1,
-                 fps: int = 10):
+                 fps: float = 7.5):
     '''
     Creates a mosaic movie, where the original movie is played back as a series of domain timecourses, each displayed over its original domain.
 
@@ -497,8 +497,8 @@ def mosaic_movie(domain_ROIs: np.ndarray,
              colormap=colormap,
              resize_factor=1,
              codec=None,
-             speed=1,
-             fps=10)
+             speed=speed,
+             fps=fps)
 
 
 def rolling_mosaic_movie(domain_ROIs: np.ndarray,
@@ -511,7 +511,7 @@ def rolling_mosaic_movie(domain_ROIs: np.ndarray,
                          resize_factor: int = 1,
                          codec: str = None,
                          speed: int = 1,
-                         fps: int = 10):
+                         fps: float = 7.5):
     '''
     A low memory version of mosaic_movie.  The functionality is the same, except each frame is written one at at a time.  Movie scale values may be slightly different, since they are calculated from the first frame instead of on the entire movie.
 
@@ -620,3 +620,225 @@ def rolling_mosaic_movie(domain_ROIs: np.ndarray,
     cbarpath = os.path.splitext(savepath)[0] + '_colorbar.pdf'
     print('Saving Colorbar to:' + cbarpath)
     save_colorbar(scale, cbarpath, colormap=colormap)
+
+
+def threshold_by_domains(components: dict,
+                   blur: int = 1,
+                   min_size_ratio: float = 0.1,
+                   map_only: bool = True,
+                   apply_filter_mean: bool = True,
+                   max_loops: int = 2,
+                   ignore_small: bool = True):
+    '''
+    Creates a domain map from extracted independent components.  A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.  Components with multiple noncontiguous significant regions are counted as two distinct domains.
+
+    Arguments:
+        components: 
+            The dictionary of components returned from seas.ica.project.  Domains are most interesting if artifacts has already been assigned through seas.gui.run_gui.
+        blur: 
+            An odd integer kernel Gaussian blur to run before segmenting.  Domains look smoother with larger blurs, but you can lose some smaller domains.
+        map_only:
+            If true, compute the map only, do not rebuild time courses under each domain.
+        apply_filter_mean:
+            Whether to compute the filtered mean when calculating ROI rebuild timecourses.
+        min_size_ratio:
+            The minimum size ratio of the mean component size to allow for a component.  If a the size of a component is under (min_size_ratio x mean_domain_size), and the next most significant domain over the pixel would result in a larger size domain, this next domain is chosen.
+        max_loops:
+            The number of times to check if the next most significant domain would result in a larger domain size.  To entirely disable this, set max_loops to 0.
+        ignore_small:
+            If True, assign undersize domains that were not reassigned during max_loops to np.nan.
+
+    Returns:
+        output: a dictionary containing the results of the operation, containing the following keys
+            domain_blur:
+                The Gaussian blur value used when generating the map
+            component_assignment: 
+                A map showing the index of which *component* was maximally significant over a given pixel.  Here, 
+                This is in contrast to the domain map, where each domain is a unique integer.  
+            domain_ROIs: 
+                The computed np.array domain map (x,y).  Each domain is represented by a unique integer, and represents a discrete continuous unit.  Values that are masked, or where large enough domains were not detected are set to np.nan.
+
+        if not map_only, the following are also included in the output dictionary:
+            ROI_timecourses: 
+                The time courses rebuilt from the video under each ROI.  The frame mean is not included in this calculation, and must be re-added from mean_filtered.
+            mean_filtered: 
+                The frame mean, filtered by the default method.
+    '''
+    print('\nExtracting Domain ROIs\n-----------------------')
+    output = {}
+    output['domain_blur'] = blur
+
+    eig_vec = components['eig_vec'].copy()
+    shape = components['shape']
+    shape = (shape[1], shape[2])
+
+    if 'roimask' in components.keys() and components['roimask'] is not None:
+        roimask = components['roimask']
+        maskind = np.where(roimask.flat == 1)[0]
+    else:
+        roimask = None
+
+    if 'artifact_components' in components.keys():
+        artifact_components = components['artifact_components']
+
+        print('Switching to signal indices only for domain detection')
+
+        if 'noise_components' in components.keys():
+            noise_components = components['noise_components']
+
+            signal_indices = np.where((artifact_components +
+                                       noise_components) == 0)[0]
+        else:
+            print('no noise components found')
+            signal_indices = np.where(artifact_components == 0)[0]
+        # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
+
+    if blur:
+        print('blurring domains...')
+        assert type(blur) is int, 'blur was not valid'
+        if blur % 2 != 1:
+            blur += 1
+
+        eigenbrain = np.empty(shape)
+        eigenbrain[:] = np.NAN
+
+        for index in range(eig_vec.shape[1]):
+
+            if roimask is not None:
+                eigenbrain.flat[maskind] = eig_vec.T[index]
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                eig_vec.T[index] = blurred.flat[maskind]
+            else:
+                eigenbrain.flat = eig_vec.T[index]
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                eig_vec.T[index] = blurred.flat
+
+    # This is the money section, return indices across each eig_vec (loading vector for component) where loading is max
+    domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
+    # Then threshold by clearing eig_vec outside of max indices
+    mask = np.zeros_like(eig_vec, dtype=bool)
+    mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
+    eig_vec[~mask] = 0
+
+    output['eig_vec'] = eig_vec
+
+    return output
+
+    # if blur:
+    #     domain_ROIs_vector[np.isnan(eig_vec[:, 0])] = np.nan
+
+    # if roimask is not None:
+    #     domain_ROIs = np.empty(shape)
+    #     domain_ROIs[:] = np.NAN
+    #     domain_ROIs.flat[maskind] = domain_ROIs_vector
+
+    # else:
+    #     domain_ROIs = np.reshape(domain_ROIs_vector, shape)
+
+    # output['component_assignment'] = domain_ROIs.copy()
+
+    # # remove small domains, separate if more than one domain per component
+    # ndomains = np.nanmax(domain_ROIs)
+    # print('domain_ROIs max:', ndomains)
+
+    # _, size = np.unique(domain_ROIs[~np.isnan(domain_ROIs)].astype('uint16'),
+    #                     return_counts=True)
+
+    # meansize = size.mean()
+    # minsize = meansize * min_size_ratio
+
+    # def replaceindex():
+    #     if n_loops < max_loops:
+    #         if roimask is not None:
+    #             roislice = np.delete(eig_vec[np.where(cc.flat[maskind] == n +
+    #                                                   1)[0], :],
+    #                                  i,
+    #                                  axis=1)
+    #         else:
+    #             roislice = np.delete(eig_vec[np.where(cc.flat == n + 1)[0], :],
+    #                                  i,
+    #                                  axis=1)
+    #         newindices = np.argmax(np.abs(roislice), axis=1)
+    #         newindices[newindices > i] += 1
+    #         domain_ROIs[np.where(cc == n + 1)] = newindices
+    #     else:
+    #         if ignore_small:
+    #             domain_ROIs[np.where(cc == n + 1)] = np.nan
+
+    # n_loops = 0
+    # while n_loops < max_loops:
+    #     n_found = 0
+    #     for i in np.arange(np.nanmax(domain_ROIs) + 1, dtype='uint16'):
+    #         roi = np.zeros(domain_ROIs.shape, dtype='uint8')
+    #         roi[np.where(domain_ROIs == i)] = 1
+    #         cc, n_objects = scipy.ndimage.measurements.label(roi)
+    #         if n_objects > 1:
+    #             objects = scipy.ndimage.measurements.find_objects(cc)
+    #             for n, obj in enumerate(objects):
+    #                 domain_size = np.where(cc[obj] == n + 1)[0].size
+    #                 if domain_size < minsize:
+    #                     n_found += 1
+    #                     replaceindex()
+    #         elif n_objects == 0:
+    #             continue
+    #         else:
+    #             objects = scipy.ndimage.measurements.find_objects(cc)
+    #             domain_size = np.where(roi == 1)[0].size
+    #             if domain_size < minsize:
+    #                 n = 0
+    #                 obj = objects[0]
+    #                 n_found += 1
+    #                 replaceindex()
+
+    #     n_loops += 1
+    #     print('n undersize objects found:', n_found, '\n')
+
+    # print('n domains', np.unique(domain_ROIs[~np.isnan(domain_ROIs)]).size)
+    # print('nanmax:', np.nanmax(domain_ROIs))
+
+    # # split components with multiple centroids
+    # for i in np.arange(np.nanmax(domain_ROIs) + 1, dtype='uint16'):
+    #     roi = np.zeros(domain_ROIs.shape, dtype='uint8')
+    #     roi[np.where(domain_ROIs == i)] = 1
+    #     cc, n_objects = scipy.ndimage.measurements.label(roi)
+    #     if n_objects > 1:
+    #         objects = scipy.ndimage.measurements.find_objects(cc)
+    #         for n, obj in enumerate(objects):
+    #             if n > 0:
+    #                 ind = np.where(cc == n + 1)
+    #                 domain_ROIs[ind] = np.nanmax(domain_ROIs) + 1
+
+    # print('n domains', np.unique(domain_ROIs[~np.isnan(domain_ROIs)]).size)
+    # print('nanmax:', np.nanmax(domain_ROIs))
+
+    # # adjust indexing to remove domains with no spatial footprint
+    # domain_offset = np.diff(np.unique(domain_ROIs[~np.isnan(domain_ROIs)]))
+
+    # adjust_indices = np.where(domain_offset > 1)[0]
+
+    # for i in adjust_indices:
+    #     domain_ROIs[np.where(domain_ROIs > i + 1)] -= (domain_offset[i] - 1)
+
+    # domain_offset = np.diff(np.unique(domain_ROIs[~np.isnan(domain_ROIs)]))
+
+    # if ('expmeta' in components.keys()):
+    #     if 'rois' in components['expmeta'].keys():
+    #         padmask = get_padded_borders(
+    #             domain_ROIs, blur, components['expmeta']['rois'],
+    #             components['expmeta']['n_roi_rotations'],
+    #             components['expmeta']['bounding_box'])
+    #         domain_ROIs[np.where(padmask == 0)] = np.nan
+    # else:
+    #     print('Couldnt make padded mask')
+
+    # output['domain_ROIs'] = domain_ROIs
+
+    # if not map_only:
+    #     timecourseresults = get_domain_rebuilt_timecourses(
+    #         domain_ROIs, components, apply_filter_mean=apply_filter_mean)
+    #     for key in timecourseresults:
+    #         output[key] = timecourseresults[key]
+    # else:
+    #     print('not calculating domain time courses')
+
+    # return output

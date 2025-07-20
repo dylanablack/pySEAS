@@ -295,9 +295,9 @@ def save(array: np.ndarray,
          resize_factor: int = 1,
          apply_cmap: bool = True,
          rescale_range: bool = False,
-         colormap: np.ndarray = 'default',
-         speed: int = 1,
-         fps: int = 10,
+         colormap: np.ndarray = DEFAULT_COLORMAP,
+         speed: int = 4,
+         fps: float = 7.5,
          codec: str = None,
          mask: np.ndarray = None,
          overlay: np.ndarray = None,
@@ -340,8 +340,8 @@ def save(array: np.ndarray,
     assert (type(array) == np.ndarray), ('Movie to save was not a '
                                          'numpy array')
 
-    if colormap == 'default':
-        colormap = DEFAULT_COLORMAP
+    # if colormap == 'default':
+    #     colormap = DEFAULT_COLORMAP
 
     if path.endswith('.tif') | path.endswith('.tiff'):
         print('Saving to: ' + path)
