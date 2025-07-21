@@ -626,7 +626,8 @@ def threshold_by_domains(components: dict,
                    map_only: bool = True,
                    apply_filter_mean: bool = True,
                    max_loops: int = 2,
-                   ignore_small: bool = True):
+                   ignore_small: bool = True,
+                   thresh_type: str = 'max'):
     '''
     Creates a domain map from extracted independent components.  A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.  Components with multiple noncontiguous significant regions are counted as two distinct domains.
 
@@ -711,12 +712,26 @@ def threshold_by_domains(components: dict,
                 blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
                 eig_vec.T[index] = blurred.flat
 
-    # This is the money section, return indices across each eig_vec (loading vector for component) where loading is max
-    domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
-    # Then threshold by clearing eig_vec outside of max indices
     mask = np.zeros_like(eig_vec, dtype=bool)
-    mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
-    eig_vec[~mask] = 0
+    flipped = components['flipped']
+    match thresh_type:
+        case 'max':
+            # Return indices across each eig_vec (loading vector for component) where loading is max
+            domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
+            # Then threshold by clearing eig_vec outside of max indices
+            mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
+            eig_vec[~mask] = 0
+        case 'percentile':
+            # Flip ICs were necessary using flipped from dict
+            flipped_eig_vec = np.multiply(flipped, eig_vec)
+            # Calculate 95 percentile cutoff for each IC
+            cutoff_vector = np.percentile(flipped_eig_vec, 0.95, axis=1)
+            # Mask for all values above cutoff
+            for i in np.arange(eig_vec.shape[0]):
+                mask[i, :] = flipped_eig_vec[i] > cutoff_vector[i]
+            eig_vec[~mask] = 0
+        case _:
+            print("Threshold type is neither max nor percentile.")
 
     output['eig_vec'] = eig_vec
 
