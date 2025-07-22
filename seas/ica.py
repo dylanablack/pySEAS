@@ -424,7 +424,7 @@ def rebuild(components: dict,
             combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
             mean_to_add = np.zeros_like(data_r)
             mean_filtered = None
-            mean_to_add[:, combined_mask] = mean[t_start:t_stop]
+            mean_to_add[:, combined_mask] = mean[t_start:t_stop, None]
             data_r += mean_to_add
     else:
         # Run original readdition of mean
