@@ -713,7 +713,7 @@ def threshold_by_domains(components: dict,
                 eig_vec.T[index] = blurred.flat
 
     mask = np.zeros_like(eig_vec, dtype=bool)
-    flipped = components['flipped']
+    
     match thresh_type:
         case 'max':
             # Return indices across each eig_vec (loading vector for component) where loading is max
@@ -728,6 +728,7 @@ def threshold_by_domains(components: dict,
             mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
             eig_vec = mask
         case 'percentile':
+            flipped = components['flipped']
             # Flip ICs were necessary using flipped from dict
             flipped_eig_vec = np.multiply(flipped, eig_vec)
             # Calculate 95 percentile cutoff for each IC
