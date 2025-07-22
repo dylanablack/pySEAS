@@ -721,12 +721,6 @@ def threshold_by_domains(components: dict,
             # Then threshold by clearing eig_vec outside of max indices
             mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
             eig_vec[~mask] = 0
-        case 'mask':
-            # Return indices across each eig_vec (loading vector for component) where loading is max
-            domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
-            # Then threshold by clearing eig_vec outside of max indices
-            mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
-            eig_vec = mask
         case 'percentile':
             flipped = components['flipped']
             # Flip ICs were necessary using flipped from dict
@@ -738,8 +732,9 @@ def threshold_by_domains(components: dict,
                 mask[i, :] = flipped_eig_vec[i] > cutoff_vector[i]
             eig_vec[~mask] = 0
         case _:
-            print("Threshold type is neither max, mask, nor percentile.")
-
+            print("Threshold type is neither max nor percentile.")
+    
+    output['masks'] = mask
     output['eig_vec'] = eig_vec
 
     return output
