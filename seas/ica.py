@@ -304,6 +304,7 @@ def rebuild(components: dict,
             t_start: int = None,
             t_stop: int = None,
             apply_mean_filter: bool = True,
+            apply_masked_mean: bool = False,
             filter_method: str = 'wavelet',
             fps: float = 7.5,
             include_noise: bool = True):
@@ -344,6 +345,7 @@ def rebuild(components: dict,
     roimask = components['roimask']
     shape = components['shape']
     mean = components['mean']
+    masks = components['masks']
     n_components = components['n_components']
     dtype = np.float32
 
@@ -406,14 +408,34 @@ def rebuild(components: dict,
     data_r = np.dot(eig_vec[:, reconstruct_indices],
                     eig_mix[t_start:t_stop, reconstruct_indices].T).T
 
-    if apply_mean_filter:
-        mean_filtered = filter_mean(mean, filter_method, fps=fps)
-        data_r += mean_filtered[t_start:t_stop, None]
+    if apply_masked_mean:
+        assert masks is not None, \
+        "Masks have not been assigned to dictionary"
+        # Apply mean to masks only, zeroing unmasked pixels
+        if apply_mean_filter:
+            combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
+            mean_to_add = np.zeros_like(data_r)
+            mean_filtered = filter_mean(mean, filter_method, fps=fps)
+            mean_to_add[:, combined_mask] = mean_filtered[t_start:t_stop, None]
+            data_r += mean_to_add
 
+        else:
+            print('Not filtering mean')
+            combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
+            mean_to_add = np.zeros_like(data_r)
+            mean_filtered = None
+            mean_to_add[:, combined_mask] = mean[t_start:t_stop]
+            data_r += mean_to_add
     else:
-        print('Not filtering mean')
-        mean_filtered = None
-        data_r += mean[t_start:t_stop, None]
+        # Run original readdition of mean
+        if apply_mean_filter:
+            mean_filtered = filter_mean(mean, filter_method, fps=fps)
+            data_r += mean_filtered[t_start:t_stop, None]
+
+        else:
+            print('Not filtering mean')
+            mean_filtered = None
+            data_r += mean[t_start:t_stop, None]
 
     print('Done!')
 
