@@ -733,7 +733,7 @@ def threshold_by_domains(components: dict,
                 eigenmask.flat[maskind] = mask.T[index]
                 filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
                 eigenbrain.flat[maskind] = filtered.flat
-                blurred = cv2.GaussianBlur(eigenbrain.flat, (blur, blur), 0)
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
                 mask.T[index] = blurred.flat[maskind]
             else:
                 eigenbrain.flat = mask.T[index]
