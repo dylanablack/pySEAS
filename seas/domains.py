@@ -15,6 +15,7 @@ from seas.video import save, rescale, rotate
 from seas.ica import rebuild_mean_roi_timecourse, filter_mean
 from seas.rois import make_mask
 from seas.colormaps import save_colorbar, REGION_COLORMAP, DEFAULT_COLORMAP
+from seas.signalanalysis import butterworth
 
 from skimage.morphology import remove_small_objects
 
@@ -670,6 +671,7 @@ def threshold_by_domains(components: dict,
     output['domain_blur'] = blur
 
     eig_vec = components['eig_vec'].copy()
+    eig_mix = components['eig_mix'].copy()
     shape = components['shape']
     shape = (shape[1], shape[2])
 
@@ -740,8 +742,16 @@ def threshold_by_domains(components: dict,
                 mask.T[index] = blurred.flat
 
     eig_vec[~mask] = 0
+
+    # Filter component timecourses
+    timecourses = eig_mix.T
+    lpf_timecourses = np.zeros_like(timecourses)
+    for index in range(timecourses.shape[1]):
+        lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+    
     output['masks'] = mask
     output['eig_vec'] = eig_vec
+    output['eig_mix'] = lpf_timecourses.T
 
     return output
 
