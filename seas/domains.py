@@ -721,15 +721,17 @@ def threshold_by_domains(components: dict,
         if blur % 2 != 1:
             blur += 1
 
-        eigenbrain = np.zeros(shape, dtype=bool)
-        # eigenbrain[:] = np.NAN
+        eigenmask = np.zeros(shape, dtype=bool)
+        eigenbrain = np.empty(shape)
+        eigenbrain[:] = np.NAN
 
         for index in range(mask.shape[1]):
 
             if roimask is not None:
-                eigenbrain.flat[maskind] = mask.T[index]
-                filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
-                blurred = cv2.GaussianBlur(filtered, (blur, blur), 0)
+                eigenmask.flat[maskind] = mask.T[index]
+                filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
+                eigenbrain.flat[maskind] = filtered.flat
+                blurred = cv2.GaussianBlur(eigenbrain.flat, (blur, blur), 0)
                 mask.T[index] = blurred.flat[maskind]
             else:
                 eigenbrain.flat = mask.T[index]
