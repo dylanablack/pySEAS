@@ -743,15 +743,18 @@ def threshold_by_domains(components: dict,
 
     eig_vec[~mask] = 0
 
+    # The following filtering isn't working, needs to be in its own function after 
+    # readdition of the mean? Maybe as part of seas.ica.rebuild?
+
     # Filter component timecourses
-    timecourses = eig_mix.T
-    lpf_timecourses = np.zeros_like(timecourses)
-    for index in range(timecourses.shape[0]):
-        lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+    # timecourses = eig_mix.T
+    # lpf_timecourses = np.zeros_like(timecourses)
+    # for index in range(timecourses.shape[0]):
+    #     lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
     
     output['masks'] = mask
     output['eig_vec'] = eig_vec
-    output['eig_mix'] = lpf_timecourses.T
+    # output['eig_mix'] = lpf_timecourses.T
 
     return output
 
