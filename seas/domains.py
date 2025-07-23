@@ -721,8 +721,8 @@ def threshold_by_domains(components: dict,
         if blur % 2 != 1:
             blur += 1
 
-        eigenbrain = np.empty(shape)
-        eigenbrain[:] = np.NAN
+        eigenbrain = np.zeros(shape, dtype=bool)
+        # eigenbrain[:] = np.NAN
 
         for index in range(mask.shape[1]):
 
