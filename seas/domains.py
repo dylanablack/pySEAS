@@ -16,6 +16,7 @@ from seas.ica import rebuild_mean_roi_timecourse, filter_mean
 from seas.rois import make_mask
 from seas.colormaps import save_colorbar, REGION_COLORMAP, DEFAULT_COLORMAP
 
+from skimage.morphology import remove_small_objects
 
 def get_domain_map(components: dict,
                    blur: int = 21,
@@ -622,6 +623,7 @@ def rolling_mosaic_movie(domain_ROIs: np.ndarray,
 
 def threshold_by_domains(components: dict,
                    blur: int = 1,
+                   min_mask_size: int = 64,
                    min_size_ratio: float = 0.1,
                    map_only: bool = True,
                    apply_filter_mean: bool = True,
@@ -691,10 +693,28 @@ def threshold_by_domains(components: dict,
             print('no noise components found')
             signal_indices = np.where(artifact_components == 0)[0]
         # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
-
-    threshold_vec = components['eig_vec'].copy()
-    mask = np.zeros_like(eig_vec, dtype=bool)
     
+    mask = np.zeros_like(eig_vec, dtype=bool)
+
+    match thresh_type:
+        case 'max':
+            # Return indices across each eig_vec (loading vector for component) where loading is max
+            threshold_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
+            # Then threshold by clearing eig_vec outside of max indices
+            mask[np.arange(eig_vec.shape[0]), threshold_ROIs_vector] = True
+        case 'percentile':
+            flipped = components['flipped']
+            # Flip ICs where necessary using flipped from dict
+            flipped_threshold_vec = np.multiply(flipped, eig_vec)
+            # Calculate 95 percentile cutoff for each IC
+            cutoff_vector = np.percentile(flipped, 0.95, axis=1)
+            # Mask for all values above cutoff
+            for i in np.arange(eig_vec.shape[0]):
+                mask[i, :] = flipped_threshold_vec[i] > cutoff_vector[i]
+        case _:
+            print("Threshold type is neither max nor percentile.")
+
+    # Filter small mask ROIs and smooth using blur
     if blur:
         print('blurring domains...')
         assert type(blur) is int, 'blur was not valid'
@@ -704,34 +724,18 @@ def threshold_by_domains(components: dict,
         eigenbrain = np.empty(shape)
         eigenbrain[:] = np.NAN
 
-        for index in range(threshold_vec.shape[1]):
+        for index in range(mask.shape[1]):
 
             if roimask is not None:
-                eigenbrain.flat[maskind] = threshold_vec.T[index]
-                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
-                threshold_vec.T[index] = blurred.flat[maskind]
+                eigenbrain.flat[maskind] = mask.T[index]
+                filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
+                blurred = cv2.GaussianBlur(filtered, (blur, blur), 0)
+                mask.T[index] = blurred.flat[maskind]
             else:
-                eigenbrain.flat = threshold_vec.T[index]
-                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
-                threshold_vec.T[index] = blurred.flat
-
-    match thresh_type:
-        case 'max':
-            # Return indices across each eig_vec (loading vector for component) where loading is max
-            domain_ROIs_vector = np.argmax(np.abs(threshold_vec), axis=1)
-            # Then threshold by clearing eig_vec outside of max indices
-            mask[np.arange(threshold_vec.shape[0]), domain_ROIs_vector] = True
-        case 'percentile':
-            flipped = components['flipped']
-            # Flip ICs where necessary using flipped from dict
-            flipped_threshold_vec = np.multiply(flipped, threshold_vec)
-            # Calculate 95 percentile cutoff for each IC
-            cutoff_vector = np.percentile(flipped_threshold_vec, 0.95, axis=1)
-            # Mask for all values above cutoff
-            for i in np.arange(eig_vec.shape[0]):
-                mask[i, :] = flipped_threshold_vec[i] > cutoff_vector[i]
-        case _:
-            print("Threshold type is neither max nor percentile.")
+                eigenbrain.flat = mask.T[index]
+                filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
+                blurred = cv2.GaussianBlur(filtered, (blur, blur), 0)
+                mask.T[index] = blurred.flat
 
     eig_vec[~mask] = 0
     output['masks'] = mask
