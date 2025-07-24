@@ -671,7 +671,7 @@ def threshold_by_domains(components: dict,
     output['domain_blur'] = blur
 
     eig_vec = components['eig_vec'].copy()
-    eig_mix = components['eig_mix'].copy()
+    # eig_mix = components['eig_mix'].copy()
     shape = components['shape']
     shape = (shape[1], shape[2])
 
@@ -732,9 +732,9 @@ def threshold_by_domains(components: dict,
             if roimask is not None:
                 eigenmask.flat[maskind] = mask.T[index]
                 filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
-                eigenbrain.flat[maskind] = filtered.flat
+                eigenbrain.flat = filtered.flat
                 blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
-                mask.T[index] = blurred.flat[maskind]
+                mask.T[index] = blurred.flat
             else:
                 eigenbrain.flat = mask.T[index]
                 filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
