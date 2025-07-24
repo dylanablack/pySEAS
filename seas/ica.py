@@ -346,7 +346,6 @@ def rebuild(components: dict,
     roimask = components['roimask']
     shape = components['shape']
     mean = components['mean']
-    masks = components['masks']
     n_components = components['n_components']
     dtype = np.float32
 
@@ -419,6 +418,7 @@ def rebuild(components: dict,
                     eig_mix[t_start:t_stop, reconstruct_indices].T).T
 
     if apply_masked_mean:
+        masks = components['masks']
         assert masks is not None, \
         "Masks have not been assigned to dictionary"
         # Apply mean to masks only, zeroing unmasked pixels
