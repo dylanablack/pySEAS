@@ -628,6 +628,7 @@ def threshold_by_domains(components: dict,
                    min_size_ratio: float = 0.1,
                    map_only: bool = True,
                    apply_filter_mean: bool = True,
+                   apply_component_filter: bool = False,
                    max_loops: int = 2,
                    ignore_small: bool = True,
                    thresh_type: str = 'max'):
@@ -671,7 +672,7 @@ def threshold_by_domains(components: dict,
     output['domain_blur'] = blur
 
     eig_vec = components['eig_vec'].copy()
-    eig_mix = components['eig_mix'].copy()
+
     shape = components['shape']
     shape = (shape[1], shape[2])
 
@@ -744,19 +745,18 @@ def threshold_by_domains(components: dict,
 
     eig_vec[~mask] = 0
 
-    # The following filtering isn't working, needs to be in its own function after 
-    # readdition of the mean? Maybe as part of seas.ica.rebuild?
-
     # Filter component timecourses
-    timecourses = eig_mix.T
-    lpf_timecourses = np.zeros_like(timecourses)
-    for index in range(timecourses.shape[0]):
-        lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+    if apply_component_filter:
+        eig_mix = components['eig_mix'].copy()
+        timecourses = eig_mix.T
+        lpf_timecourses = np.zeros_like(timecourses)
+        for index in range(timecourses.shape[0]):
+            lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+        output['eig_mix'] = lpf_timecourses.T
     
     output['masks'] = mask
     output['eig_vec'] = eig_vec
-    output['eig_mix'] = lpf_timecourses.T
-
+    
     return output
 
     # if blur:

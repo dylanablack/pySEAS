@@ -304,6 +304,7 @@ def rebuild(components: dict,
             t_start: int = None,
             t_stop: int = None,
             apply_mean_filter: bool = True,
+            apply_component_filter: bool = False,
             apply_masked_mean: bool = False,
             filter_method: str = 'wavelet',
             fps: float = 7.5,
@@ -387,6 +388,15 @@ def rebuild(components: dict,
         "Eigenvector size is not compatible with the masked region's size"
 
     eig_mix = components['eig_mix']
+
+    # Filter component timecourses
+    if apply_component_filter:
+        print('Filtering component timecourses using butterworth_lowpass at 0.5Hz...')
+        timecourses = eig_mix.T
+        lpf_timecourses = np.zeros_like(timecourses)
+        for index in range(timecourses.shape[0]):
+            lpf_timecourses[index] = butterworth(timecourses[index], high=0.5)
+        eig_mix = lpf_timecourses.T
 
     if (t_start == None):
         t_start = 0
