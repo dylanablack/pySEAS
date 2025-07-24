@@ -671,7 +671,7 @@ def threshold_by_domains(components: dict,
     output['domain_blur'] = blur
 
     eig_vec = components['eig_vec'].copy()
-    # eig_mix = components['eig_mix'].copy()
+    eig_mix = components['eig_mix'].copy()
     shape = components['shape']
     shape = (shape[1], shape[2])
 
@@ -732,10 +732,10 @@ def threshold_by_domains(components: dict,
             if roimask is not None:
                 eigenmask.flat[maskind] = mask.T[index]
                 filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
-                filtered_float = filtered.astype(np.float32)
-                eigenbrain.flat[maskind] = filtered_float.flat
-                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
-                mask.T[index] = blurred.flat[maskind]
+                # filtered_float = filtered.astype(np.float32)
+                # eigenbrain.flat[maskind] = filtered_float.flat
+                # blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                mask.T[index] = filtered.flat[maskind]
             else:
                 eigenbrain.flat = mask.T[index]
                 filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
@@ -748,14 +748,14 @@ def threshold_by_domains(components: dict,
     # readdition of the mean? Maybe as part of seas.ica.rebuild?
 
     # Filter component timecourses
-    # timecourses = eig_mix.T
-    # lpf_timecourses = np.zeros_like(timecourses)
-    # for index in range(timecourses.shape[0]):
-    #     lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+    timecourses = eig_mix.T
+    lpf_timecourses = np.zeros_like(timecourses)
+    for index in range(timecourses.shape[0]):
+        lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
     
     output['masks'] = mask
     output['eig_vec'] = eig_vec
-    # output['eig_mix'] = lpf_timecourses.T
+    output['eig_mix'] = lpf_timecourses.T
 
     return output
 
