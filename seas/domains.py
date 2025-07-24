@@ -751,7 +751,7 @@ def threshold_by_domains(components: dict,
         timecourses = eig_mix.T
         lpf_timecourses = np.zeros_like(timecourses)
         for index in range(timecourses.shape[0]):
-            lpf_timecourses[index] = butterworth(timecourses[index], high=1.0)
+            lpf_timecourses[index] = butterworth(timecourses[index], high=0.5)
         output['eig_mix'] = lpf_timecourses.T
     
     output['masks'] = mask
