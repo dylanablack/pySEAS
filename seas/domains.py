@@ -628,7 +628,8 @@ def threshold_by_domains(components: dict,
                    min_size_ratio: float = 0.1,
                    map_only: bool = True,
                    apply_filter_mean: bool = True,
-                   apply_component_filter: bool = False,
+                   apply_component_lpf: bool = False,
+                   chigh: float = 0.5,
                    max_loops: int = 2,
                    ignore_small: bool = True,
                    thresh_type: str = 'max'):
@@ -732,26 +733,31 @@ def threshold_by_domains(components: dict,
 
             if roimask is not None:
                 eigenmask.flat[maskind] = mask.T[index]
+                # Remove small mask objects
                 filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
-                # filtered_float = filtered.astype(np.float32)
-                # eigenbrain.flat[maskind] = filtered_float.flat
-                # blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
-                mask.T[index] = filtered.flat[maskind]
+                filtered_float = filtered.astype(np.float64)
+                eigenbrain.flat[maskind] = filtered_float.flat[maskind]
+                # Then blur
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                mask.T[index] = blurred.flat[maskind]
             else:
                 eigenbrain.flat = mask.T[index]
                 filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
-                blurred = cv2.GaussianBlur(filtered, (blur, blur), 0)
+                filtered_float = filtered.astype(np.float64)
+                eigenbrain.flat[maskind] = filtered_float.flat
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
                 mask.T[index] = blurred.flat
 
-    eig_vec[~mask] = 0
+    mask_bool = mask.astype(bool)
+    eig_vec[~mask_bool] = 0
 
     # Filter component timecourses
-    if apply_component_filter:
+    if apply_component_lpf:
         eig_mix = components['eig_mix'].copy()
         timecourses = eig_mix.T
         lpf_timecourses = np.zeros_like(timecourses)
         for index in range(timecourses.shape[0]):
-            lpf_timecourses[index] = butterworth(timecourses[index], high=0.5)
+            lpf_timecourses[index] = butterworth(timecourses[index], high=chigh)
         output['eig_mix'] = lpf_timecourses.T
     
     output['masks'] = mask
