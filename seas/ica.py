@@ -304,7 +304,10 @@ def rebuild(components: dict,
             t_start: int = None,
             t_stop: int = None,
             apply_mean_filter: bool = True,
+            mlow: float = 0.5,
+            mhigh: float = 1.0,
             apply_component_filter: bool = False,
+            chigh: float = 1.0,
             apply_masked_mean: bool = False,
             filter_method: str = 'wavelet',
             fps: float = 7.5,
@@ -394,7 +397,7 @@ def rebuild(components: dict,
         timecourses = eig_mix.T
         lpf_timecourses = np.zeros_like(timecourses)
         for index in range(timecourses.shape[0]):
-            lpf_timecourses[index] = butterworth(timecourses[index], high=0.5)
+            lpf_timecourses[index] = butterworth(timecourses[index], high=chigh)
         eig_mix = lpf_timecourses.T
 
     if (t_start == None):
@@ -425,7 +428,7 @@ def rebuild(components: dict,
         if apply_mean_filter:
             combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
             mean_to_add = np.zeros_like(data_r)
-            mean_filtered = filter_mean(mean, filter_method, fps=fps)
+            mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
             mean_to_add[:, combined_mask] = mean_filtered[t_start:t_stop, None]
             data_r += mean_to_add
 
@@ -439,7 +442,7 @@ def rebuild(components: dict,
     else:
         # Run original readdition of mean
         if apply_mean_filter:
-            mean_filtered = filter_mean(mean, filter_method, fps=fps)
+            mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
             data_r += mean_filtered[t_start:t_stop, None]
 
         else:
