@@ -708,8 +708,8 @@ def threshold_by_domains(components: dict,
             # Then threshold by clearing eig_vec outside of max indices
             mask[np.arange(eig_vec.shape[0]), threshold_ROIs_vector] = True
         case 'z-score':
-            mean_ROIs_vector = np.nanmean(eig_vec, axis=1)
-            std_ROIs_vector = np.nanstd(eig_vec, axis=1)
+            mean_ROIs_vector = np.nanmean(eig_vec, axis=0)
+            std_ROIs_vector = np.nanstd(eig_vec, axis=0)
             z_ROIs_vector = (eig_vec - mean_ROIs_vector)/std_ROIs_vector
             for i in np.arange(eig_vec.shape[0]):
                 mask[i, :] = np.abs(z_ROIs_vector[i]) > thresh_param
