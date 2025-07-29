@@ -632,7 +632,8 @@ def threshold_by_domains(components: dict,
                    chigh: float = 0.5,
                    max_loops: int = 2,
                    ignore_small: bool = True,
-                   thresh_type: str = 'max'):
+                   thresh_type: str = 'max',
+                   thresh_param: float = None):
     '''
     Creates a domain map from extracted independent components.  A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.  Components with multiple noncontiguous significant regions are counted as two distinct domains.
 
@@ -706,6 +707,12 @@ def threshold_by_domains(components: dict,
             threshold_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
             # Then threshold by clearing eig_vec outside of max indices
             mask[np.arange(eig_vec.shape[0]), threshold_ROIs_vector] = True
+        case 'z-score':
+            mean_ROIs_vector = np.nanmean(eig_vec, axis=1)
+            std_ROIs_vector = np.nanstd(eig_vec, axis=1)
+            z_ROIs_vector = (eig_vec - mean_ROIs_vector)/std_ROIs_vector
+            for i in np.arange(eig_vec.shape[0]):
+                mask[i, :] = np.abs(z_ROIs_vector[i]) > thresh_param
         case 'percentile':
             flipped = components['flipped']
             # Flip ICs where necessary using flipped from dict
