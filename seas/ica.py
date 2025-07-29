@@ -543,6 +543,12 @@ def filter_mean(mean: np.ndarray,
         wavelet = waveletAnalysis(mean.astype('float64'), fps=fps)
         mean_filtered = wavelet.noiseFilter(upperPeriod=1 / low_cutoff)
 
+    elif filter_method == 'constant':
+        mean_template = np.zeros_like(mean)
+        meanest_mean = np.mean(mean)
+        mean_filtered = mean_template + meanest_mean
+        print('Mean set as constant: dfof = ' + str(meanest_mean))
+
     else:
         raise Exception("Filter method '" + str(filter_method)\
          + "' not supported!\n\t Supported methods: butterworth, butterworth_bandpass, wavelet")
