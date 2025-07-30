@@ -309,7 +309,7 @@ def rebuild(components: dict,
             apply_component_filter: bool = False,
             chigh: float = 1.0,
             apply_masked_mean: bool = False,
-            filter_method: str = 'wavelet',
+            filter_method: str = 'butterworth_highpass',
             fps: float = 7.5,
             include_noise: bool = True):
     '''
@@ -329,8 +329,20 @@ def rebuild(components: dict,
             The frame to stop rebuilding the movie at.  If none is provided, the rebuilt movie ends at the last frame
         apply_mean_filter:
             Whether to apply a filter to the mean signal.
-        filter_method:;
-            The filter method to apply (see filter_mean function).
+        mlow:
+            A float determining the highpass cutoff for the mean filter, if used.
+        mhigh:
+            A float determining the lowpass cutoff for the mean filter, if used.
+        apply_component_filter:
+            Whether to apply a butterworth_lowpass filter to IC timecourses before rebuild.
+        chigh:
+            A float determining the lowpass cutoff for the component filter, if used.
+        apply_masked_mean:
+            If True, only re-adds the mean signal to pixels where at least one IC is defined. To be used for thresholded ICs.
+        filter_method:
+            The filter method to apply to the mean. Choose from 'butterworth_bandpass', 'butterworth_lowpass', 'butterworth_highpass', or 'constant'. Behaviour for 'wavelet' as yet undefined.
+        fps:
+            A float determining the fps for the source video.
         include_noise:
             Whether to include noise components when rebuilding.  If noise_components should not be included in the rebuilt movie, set this to False
 
@@ -389,11 +401,10 @@ def rebuild(components: dict,
         assert eig_vec[:,0].size == maskind[0].size, \
         "Eigenvector size is not compatible with the masked region's size"
 
-    eig_mix = components['eig_mix']
-
     # Filter component timecourses
     if apply_component_filter:
         print('Filtering component timecourses using butterworth_lowpass at 0.5Hz...')
+        eig_mix = components['eig_mix']
         timecourses = eig_mix.T
         lpf_timecourses = np.zeros_like(timecourses)
         for index in range(timecourses.shape[0]):
