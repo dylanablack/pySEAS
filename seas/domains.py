@@ -625,49 +625,31 @@ def rolling_mosaic_movie(domain_ROIs: np.ndarray,
 def threshold_by_domains(components: dict,
                    blur: int = 1,
                    min_mask_size: int = 64,
-                   min_size_ratio: float = 0.1,
-                   map_only: bool = True,
-                   apply_filter_mean: bool = True,
-                   apply_component_lpf: bool = False,
-                   chigh: float = 0.5,
-                   max_loops: int = 2,
-                   ignore_small: bool = True,
                    thresh_type: str = 'max',
                    thresh_param: float = None):
     '''
-    Creates a domain map from extracted independent components.  A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.  Components with multiple noncontiguous significant regions are counted as two distinct domains.
+    Function based on modified get_domain_map(). Thresholds ICs using a variety of methods for selective rebuild.
 
     Arguments:
         components: 
-            The dictionary of components returned from seas.ica.project.  Domains are most interesting if artifacts has already been assigned through seas.gui.run_gui.
+            The dictionary of components returned from seas.ica.project.  ROIs are most interesting if artifacts has already been assigned through seas.gui.run_gui.
         blur: 
-            An odd integer kernel Gaussian blur to run before segmenting.  Domains look smoother with larger blurs, but you can lose some smaller domains.
-        map_only:
-            If true, compute the map only, do not rebuild time courses under each domain.
-        apply_filter_mean:
-            Whether to compute the filtered mean when calculating ROI rebuild timecourses.
-        min_size_ratio:
-            The minimum size ratio of the mean component size to allow for a component.  If a the size of a component is under (min_size_ratio x mean_domain_size), and the next most significant domain over the pixel would result in a larger size domain, this next domain is chosen.
-        max_loops:
-            The number of times to check if the next most significant domain would result in a larger domain size.  To entirely disable this, set max_loops to 0.
-        ignore_small:
-            If True, assign undersize domains that were not reassigned during max_loops to np.nan.
+            An odd integer kernel Gaussian blur to run before segmenting.  ROIs look smoother with larger blurs, but you can lose some smaller domains.
+        min_mask_size:
+            An integer determining the minimum ROIs passed from each thresholded IC.
+        thresh_type:
+            A string used to determine IC threshold method. Choose from either 'max', 'z-score' or 'percentile'.
+        thresh_param:
+            A float used to determine the parameter for the given thresh_type. For 'z-score', this is the z-score threshold (eg; 2.0 for 2std). For 'percentile' this is the percentile used to threshold (eg; 95th percentile = 0.95).
 
     Returns:
         output: a dictionary containing the results of the operation, containing the following keys
             domain_blur:
                 The Gaussian blur value used when generating the map
-            component_assignment: 
-                A map showing the index of which *component* was maximally significant over a given pixel.  Here, 
-                This is in contrast to the domain map, where each domain is a unique integer.  
-            domain_ROIs: 
-                The computed np.array domain map (x,y).  Each domain is represented by a unique integer, and represents a discrete continuous unit.  Values that are masked, or where large enough domains were not detected are set to np.nan.
-
-        if not map_only, the following are also included in the output dictionary:
-            ROI_timecourses: 
-                The time courses rebuilt from the video under each ROI.  The frame mean is not included in this calculation, and must be re-added from mean_filtered.
-            mean_filtered: 
-                The frame mean, filtered by the default method.
+            eig_vec: 
+                The thresholded eigenvectors (ICs).  
+            thresh_masks: 
+                The boolean masks used to threshold eig_vec.
     '''
     print('\nExtracting Domain ROIs\n-----------------------')
     output = {}
@@ -718,7 +700,7 @@ def threshold_by_domains(components: dict,
             # Flip ICs where necessary using flipped from dict
             flipped_threshold_vec = np.multiply(flipped, eig_vec)
             # Calculate 95 percentile cutoff for each IC
-            cutoff_vector = np.percentile(flipped, 0.95, axis=1)
+            cutoff_vector = np.percentile(flipped, thresh_param, axis=0)
             # Mask for all values above cutoff
             for i in np.arange(eig_vec.shape[0]):
                 mask[i, :] = flipped_threshold_vec[i] > cutoff_vector[i]
@@ -757,17 +739,9 @@ def threshold_by_domains(components: dict,
 
     mask_bool = mask.astype(bool)
     eig_vec[~mask_bool] = 0
-
-    # Filter component timecourses
-    if apply_component_lpf:
-        eig_mix = components['eig_mix'].copy()
-        timecourses = eig_mix.T
-        lpf_timecourses = np.zeros_like(timecourses)
-        for index in range(timecourses.shape[0]):
-            lpf_timecourses[index] = butterworth(timecourses[index], high=chigh)
-        output['eig_mix'] = lpf_timecourses.T
     
-    output['masks'] = mask
+    output['thresh_masks'] = mask
+    # output['thresh_vec'] = eig_vec
     output['eig_vec'] = eig_vec
     
     return output
