@@ -580,7 +580,7 @@ def filter_components(eig_mix: np.ndarray,
     Returns:
         lpf_eig_mix: The filtered IC timecourses reconstructed as the eig_mix matrix.
     '''
-    print('Filtering component timecourses using butterworth_lowpass at '+ high_cutoff +'Hz...')
+    print('Filtering component timecourses using butterworth_lowpass at '+ str(high_cutoff) +'Hz...')
 
     timecourses = eig_mix.T
     lpf_timecourses = np.zeros_like(timecourses)
