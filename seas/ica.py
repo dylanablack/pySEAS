@@ -404,12 +404,8 @@ def rebuild(components: dict,
 
     # Filter component timecourses
     if apply_component_filter:
-        print('Filtering component timecourses using butterworth_lowpass at 0.5Hz...')
-        timecourses = eig_mix.T
-        lpf_timecourses = np.zeros_like(timecourses)
-        for index in range(timecourses.shape[0]):
-            lpf_timecourses[index] = butterworth(timecourses[index], high=chigh)
-        eig_mix = lpf_timecourses.T
+        lpf_eig_mix = filter_components(eig_mix, fps=fps, high_cutoff=chigh)
+        eig_mix = lpf_eig_mix
 
     if (t_start == None):
         t_start = 0
@@ -565,6 +561,34 @@ def filter_mean(mean: np.ndarray,
          + "' not supported!\n\t Supported methods: butterworth, butterworth_bandpass, wavelet")
 
     return mean_filtered
+
+
+def filter_components(eig_mix: np.ndarray,
+                      fps: float = 7.5,
+                      high_cutoff: float = 0.5):
+    '''
+    Applies a butterworth low pass filter to the ica component timecourses.
+
+    Arguments:
+        eig_mix: 
+            The mixing matrix containing IC timecourses.
+        fps:
+            Sampling rate of the video.
+        high_cutoff:
+            The frequency cutoff to apply the low pass filter at.
+
+    Returns:
+        lpf_eig_mix: The filtered IC timecourses reconstructed as the eig_mix matrix.
+    '''
+    print('Filtering component timecourses using butterworth_lowpass at '+ str(high_cutoff) +'Hz...')
+
+    timecourses = eig_mix.T
+    lpf_timecourses = np.zeros_like(timecourses)
+    for index in range(timecourses.shape[0]):
+        lpf_timecourses[index] = butterworth(timecourses[index], fps=fps, high=high_cutoff)
+    lpf_eig_mix = lpf_timecourses.T
+
+    return lpf_eig_mix
 
 
 def rebuild_mean_roi_timecourse(components: np.ndarray,
