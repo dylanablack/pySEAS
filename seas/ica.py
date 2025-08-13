@@ -358,6 +358,7 @@ def rebuild(components: dict,
     assert type(components) is dict, 'Components were not in format expected'
 
     eig_vec = components['eig_vec']
+    eig_mix = components['eig_mix']
     roimask = components['roimask']
     shape = components['shape']
     mean = components['mean']
@@ -404,7 +405,6 @@ def rebuild(components: dict,
     # Filter component timecourses
     if apply_component_filter:
         print('Filtering component timecourses using butterworth_lowpass at 0.5Hz...')
-        eig_mix = components['eig_mix']
         timecourses = eig_mix.T
         lpf_timecourses = np.zeros_like(timecourses)
         for index in range(timecourses.shape[0]):
