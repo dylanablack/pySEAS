@@ -115,11 +115,11 @@ def run_gui(components: dict,
         print('initializing artifact_components toggle')
         toggle = np.zeros((n_components,), dtype='uint8')
 
-    if 'flipped' in components:
-        flipped = components['flipped']
+    # if 'flipped' in components:
+    #     flipped = components['flipped']
 
-        timecourses = timecourses * flipped[:, None]
-        eig_vec = eig_vec * flipped
+    #     timecourses = timecourses * flipped[:, None]
+    #     eig_vec = eig_vec * flipped
 
     if 'domain_ROIs' in components:
         domain_ROIs = components['domain_ROIs']
@@ -469,7 +469,7 @@ def run_gui(components: dict,
 
                     if component_id is None:  # Clear image.
                         im = np.empty((x, y))
-                        im[:] = np.NAN
+                        im[:] = np.nan
                         self.imgplot = self.ax.imshow(im)
                         self.canvas.draw()
                         return ()

@@ -8,11 +8,13 @@ from seas.video import load, dfof, rotate, rescale
 from seas.filemanager import sort_experiments, get_exp_span_string, read_yaml
 from seas.rois import roi_loader, make_mask, get_masked_region, insert_masked_region, draw_bounding_box
 from seas.hdf5manager import hdf5manager
-from seas.ica import project, filter_mean
+from seas.ica import project, filter_mean, rebuild_eigenbrain, threshold_by_domains, filter_components, threshold_components, rebuild
 from seas.signalanalysis import sort_noise, lag_n_autocorr
 from seas.waveletAnalysis import waveletAnalysis
+from seas.domains import get_domain_map
 
 from typing import List
+import tifffile as tif
 
 
 class Experiment:
@@ -112,7 +114,7 @@ class Experiment:
 
         if np.any(np.isnan(movie)):
             # If the video was already masked
-            roimask = np.zeros(movie[0].shape, dtype='uisnt8')
+            roimask = np.zeros(movie[0].shape, dtype='uint8')
             roimask[np.where(~np.isnan(movie[0]))] = 1
             self.roimask = roimask
 
@@ -461,3 +463,133 @@ class Experiment:
             f.print()
 
         return components
+
+def export_event_masks(components: dict,
+                       outpath: str,
+                       blur: int = 3,
+                       thresh_type: str = 'z-score',
+                       thresh_param: float = 7,
+                       schematic: bool = False) -> None:
+    components_copy = components.copy()
+    threshold = threshold_by_domains(components_copy, 
+                                     blur = blur, 
+                                     thresh_type = thresh_type, 
+                                     thresh_param = thresh_param,
+                                     schematic = schematic)
+    components_copy.update(threshold)
+    artifacts_bool = components_copy['artifact_components'].astype(bool)
+    event_components = components_copy['eig_vec'][:, ~artifacts_bool]
+    event_masks = rebuild_eigenbrain(event_components,
+                                     roimask = components_copy['roimask'], 
+                                     bulk = True)
+    event_masks = np.where(np.abs(event_masks) > 0, 255, 0)
+    event_masks = np.where(np.mean(event_masks, axis = 0) == 255, 0, event_masks)
+    tif.imwrite(outpath, event_masks.astype(np.float32),imagej=True)
+
+def export_event_video(components: dict,
+                       outpath: str,
+                       artifact_components: np.ndarray = None,
+                       blur = 3,
+                       thresh_type = 'z-score',
+                       thresh_param = 7,
+                       t_start: int = None,
+                       t_stop: int = None,
+                       apply_mean_filter: bool = True,
+                       cthresh: float = 2.0,
+                       apply_masked_mean: bool = False,
+                       filter_method: str = 'constant',
+                       include_noise: bool = True,
+                       binary_threshold: bool = False) -> None:
+    components_copy = components.copy()
+    threshold = threshold_by_domains(components_copy, 
+                                     blur = blur, 
+                                     thresh_type = thresh_type, 
+                                     thresh_param = thresh_param)
+    eig_mix = filter_components(components_copy['eig_mix'])
+    eig_mix = threshold_components(eig_mix, 
+                                   thresh_param = cthresh)
+    components_copy.update(threshold)
+    components_copy['eig_mix'] = eig_mix
+    rebuilt = rebuild(components_copy,
+                      artifact_components = artifact_components,
+                      t_start = t_start, 
+                      t_stop = t_stop,
+                      apply_mean_filter = apply_mean_filter,
+                      cthresh = cthresh,
+                      apply_masked_mean = apply_masked_mean,
+                      filter_method = filter_method,
+                      include_noise = include_noise,
+                      binary_threshold = binary_threshold)
+    tif.imwrite(outpath, rebuilt.astype(np.float32), imagej=True)
+
+def sort_components(components: dict, sort_by_noise: bool = True):
+    eig_vec = components['eig_vec']
+    eig_mix = components['eig_mix']
+    lag1 = components['lag1']
+    lag1_full = components['lag1_full']
+    noise = components['noise_components']
+
+    if sort_by_noise:
+        ev_sort = np.argsort(lag1) # Sorting by lag1 auto-correlation
+    else:
+        ev_sort = np.argsort(eig_mix.std(axis=0)) # Sorting by timecourse standard deviation.
+    
+    eig_vec = eig_vec[:, ev_sort][:, ::-1]
+    eig_mix = eig_mix[:, ev_sort][:, ::-1]
+    lag1 = lag1[ev_sort][::-1]
+    lag1_full = lag1_full[ev_sort][::-1]
+    noise = noise[ev_sort][::-1]
+    
+    if 'artifact_components' in components:
+        artifacts = components['artifact_components']
+        artifacts = artifacts[ev_sort][::-1]
+        components['artifact_components'] = artifacts
+    
+    # Save sorted values
+    components['eig_vec'] = eig_vec
+    components['eig_mix'] = eig_mix
+    components['lag1'] = lag1
+    components['lag1_full'] = lag1_full
+    components['noise_components'] = noise
+    
+    # Derive from sorted values
+    components['timecourses'] = eig_mix.T
+    
+    # Recalculation calls (how PySEAS does it originally)
+    #noise, cutoff = sort_noise(eig_mix.T)
+    #components['cutoff'] = cutoff
+    #components['lag1'] = lag_n_autocorr(components['timecourses'], 1)
+
+    # Recalculate domain map (doesn't work for some reason)
+    # domain_map = get_domain_map(components, map_only = False)
+    # components.update(domain_map)
+
+    if 'ROI_timecourses' in components:
+        print('Removing unsorted ROI_timecourses.')
+        del components['ROI_timecourses']
+    else:
+        print('ROI_timecourses not found. Skipping deletion.')
+
+    return components
+
+def flip_negative_components(components: dict):
+    n_components = components['n_components']
+    eig_vec = components['eig_vec']
+    eig_mix = components['eig_mix']
+
+    # Track component orientation and ensure positive spatial patterns
+    flipped = np.ones(n_components)
+    for i in range(n_components):
+        # Find the index of maximum absolute value
+        max_idx = np.argmax(np.abs(eig_vec[:, i]))
+        # If that maximum value is negative, flip the component
+        if eig_vec[max_idx, i] < 0:
+            eig_vec[:, i] *= -1
+            eig_mix[:, i] *= -1
+            flipped[i] = -1
+
+    components['flipped'] = flipped
+    components['eig_vec'] = eig_vec
+    components['eig_mix'] = eig_mix
+
+    return components

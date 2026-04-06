@@ -12,11 +12,18 @@ from seas.signalanalysis import butterworth, sort_noise, lag_n_autocorr
 from seas.hdf5manager import hdf5manager
 from seas.video import rotate, save, rescale, play, scale_video
 
+import cv2
+from skimage.morphology import remove_small_objects
+from skimage import draw, measure
+from scipy import ndimage
+import tifffile as tif
+
 
 def project(vector: np.ndarray,
             shape: Tuple[int, int, int],
             roimask: np.ndarray = None,
             n_components: int = None,
+            crop_excess_noise: bool = True,
             svd_multiplier: float = 5,
             calc_residuals: bool = True,
             max_iter: int = 1000):
@@ -120,11 +127,14 @@ def project(vector: np.ndarray,
         try:
             u, ev, _ = linalg.svd(vector, full_matrices=False)
         except ValueError:
-            # LAPACK error if matricies are too big
-            u, ev, _ = linalg.svd(vector,
-                                  full_matrices=False,
-                                  lapack_driver='gesvd')
-
+            try:
+                # LAPACK error if matricies are too big
+                u, ev, _ = linalg.svd(vector,
+                                      full_matrices=False,
+                                      lapack_driver='gesvd')
+            except ValueError:
+                u, ev, _ = np.linalg.svd(vector,
+                                         full_matrices=False)
         components['svd_eigval'] = ev
 
         #Get starting point for decomposition based on svd mutliplier * the approximate
@@ -144,6 +154,7 @@ def project(vector: np.ndarray,
                           w_init=w_init)
 
             eig_vec = ica.fit_transform(vector)
+            print("n_iter:" , ica.n_iter_)
             eig_mix = ica.mixing_
 
             noise, cutoff = sort_noise(eig_mix.T)
@@ -183,23 +194,26 @@ def project(vector: np.ndarray,
         reduced_n_components = int((noise.size - noise.sum()) * 1.25)
 
         print('reduced_n_components:', reduced_n_components)
+        
+        if crop_excess_noise:
+            if reduced_n_components < n_components:
+                print('Cropping', n_components, 'to', reduced_n_components)
 
-        if reduced_n_components < n_components:
-            print('Cropping', n_components, 'to', reduced_n_components)
+                ev_sort = np.argsort(eig_mix.std(axis=0))
+                eig_vec = eig_vec[:, ev_sort][:, ::-1]
+                eig_mix = eig_mix[:, ev_sort][:, ::-1]
+                noise = noise[ev_sort][::-1]
 
-            ev_sort = np.argsort(eig_mix.std(axis=0))
-            eig_vec = eig_vec[:, ev_sort][:, ::-1]
-            eig_mix = eig_mix[:, ev_sort][:, ::-1]
-            noise = noise[ev_sort][::-1]
+                eig_vec = eig_vec[:, :reduced_n_components]
+                eig_mix = eig_mix[:, :reduced_n_components]
+                n_components = reduced_n_components
+                noise = noise[:reduced_n_components]
 
-            eig_vec = eig_vec[:, :reduced_n_components]
-            eig_mix = eig_mix[:, :reduced_n_components]
-            n_components = reduced_n_components
-            noise = noise[:reduced_n_components]
-
-            components['lag1_full'] = components['lag1_full'][ev_sort][::-1]
+                components['lag1_full'] = components['lag1_full'][ev_sort][::-1]
+            else:
+                print('Less than 75% signal.  Not cropping excess noise.')
         else:
-            print('Less than 75% signal.  Not cropping excess noise.')
+            print('Noise retention enabled. Not cropping excess noise.')
 
         components['noise_components'] = noise
         components['cutoff'] = cutoff
@@ -261,7 +275,7 @@ def project(vector: np.ndarray,
             vector = vector.astype('float64')
             rebuilt = rebuild(components,
                               artifact_components='none',
-                              vector=True).T
+                              apply_mean_filter=False).T
 
             rebuilt -= rebuilt.mean(axis=0)
             vector -= vector.mean(axis=0)
@@ -298,13 +312,20 @@ def project(vector: np.ndarray,
     print('\n')
     return components
 
-
 def rebuild(components: dict,
             artifact_components: np.ndarray = None,
             t_start: int = None,
             t_stop: int = None,
             apply_mean_filter: bool = True,
-            filter_method: str = 'wavelet',
+            mlow: float = 0.5,
+            mhigh: float = 1.0,
+            apply_component_filter: bool = False,
+            chigh: float = 1.0,
+            apply_component_threshold: bool = False,
+            cthresh: float = 2.0,
+            apply_masked_mean: bool = False,
+            binary_threshold: bool = False,
+            filter_method: str = 'butterworth_highpass',
             fps: float = 7.5,
             include_noise: bool = True):
     '''
@@ -324,8 +345,24 @@ def rebuild(components: dict,
             The frame to stop rebuilding the movie at.  If none is provided, the rebuilt movie ends at the last frame
         apply_mean_filter:
             Whether to apply a filter to the mean signal.
-        filter_method:;
-            The filter method to apply (see filter_mean function).
+        mlow:
+            A float determining the highpass cutoff for the mean filter, if used.
+        mhigh:
+            A float determining the lowpass cutoff for the mean filter, if used.
+        apply_component_filter:
+            Whether to apply a butterworth_lowpass filter to IC timecourses before rebuild.
+        chigh:
+            A float determining the lowpass cutoff for the component filter, if used.
+        apply_component_threshold:
+            Whether to apply a z-score threshold on the component timeseries.
+        cthresh:
+            A float determining the z-score threshold for the component threshold, if used.
+        apply_masked_mean:
+            If True, only re-adds the mean signal to pixels where at least one IC is defined. To be used for thresholded ICs.
+        filter_method:
+            The filter method to apply to the mean. Choose from 'butterworth_bandpass', 'butterworth_lowpass', 'butterworth_highpass', or 'constant'. Behaviour for 'wavelet' as yet undefined.
+        fps:
+            A float determining the fps for the source video.
         include_noise:
             Whether to include noise components when rebuilding.  If noise_components should not be included in the rebuilt movie, set this to False
 
@@ -341,6 +378,7 @@ def rebuild(components: dict,
     assert type(components) is dict, 'Components were not in format expected'
 
     eig_vec = components['eig_vec']
+    eig_mix = components['eig_mix']
     roimask = components['roimask']
     shape = components['shape']
     mean = components['mean']
@@ -358,7 +396,8 @@ def rebuild(components: dict,
     elif artifact_components == 'none':
         print('including all components')
         artifact_components = np.zeros(n_components)
-    elif ((not include_noise) and ('noise_components' in components.keys())):
+    
+    if ((not include_noise) and ('noise_components' in components.keys())):
         print('Not rebuilding noise components')
         artifact_components += components['noise_components']
         artifact_components[np.where(artifact_components > 1)] = 1
@@ -384,7 +423,15 @@ def rebuild(components: dict,
         assert eig_vec[:,0].size == maskind[0].size, \
         "Eigenvector size is not compatible with the masked region's size"
 
-    eig_mix = components['eig_mix']
+    # Filter component timecourses
+    if apply_component_filter:
+        lpf_eig_mix = filter_components(eig_mix, fps=fps, high_cutoff=chigh)
+        eig_mix = lpf_eig_mix
+
+    # Threshold component timecourses
+    if apply_component_threshold:
+        thresh_eig_mix = threshold_components(eig_mix, thresh_param=cthresh)
+        eig_mix = thresh_eig_mix
 
     if (t_start == None):
         t_start = 0
@@ -405,15 +452,47 @@ def rebuild(components: dict,
     print('\nReconstructing....')
     data_r = np.dot(eig_vec[:, reconstruct_indices],
                     eig_mix[t_start:t_stop, reconstruct_indices].T).T
+    # spatiotemporal_event_masks = data_r[data_r > 0]
 
-    if apply_mean_filter:
-        mean_filtered = filter_mean(mean, filter_method, fps=fps)
-        data_r += mean_filtered[t_start:t_stop, None]
+    if apply_masked_mean:
+        # Apply mean to masks only, zeroing unmasked pixels
+        spatiotemporal_event_masks = np.zeros_like(data_r)
+        spatiotemporal_event_masks[data_r > 0] = 255
+        spatiotemporal_event_masks = spatiotemporal_event_masks.astype(bool)
+        masks = components['thresh_masks']
+        assert masks is not None, \
+        "Masks have not been assigned to dictionary"
+        if apply_mean_filter:
+            combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
+            mean_to_add = np.zeros_like(data_r)
+            mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
+            mean_to_add[:, combined_mask] = mean_filtered[t_start:t_stop, None]
+            data_r += mean_to_add
+            data_r[~spatiotemporal_event_masks] = 0
 
+        else:
+            print('Not filtering mean')
+            combined_mask = np.any(masks[:, reconstruct_indices], axis=1)
+            mean_to_add = np.zeros_like(data_r)
+            mean_filtered = None
+            mean_to_add[:, combined_mask] = mean[t_start:t_stop, None]
+            data_r += mean_to_add
+            data_r[~spatiotemporal_event_masks] = 0
     else:
-        print('Not filtering mean')
-        mean_filtered = None
-        data_r += mean[t_start:t_stop, None]
+        # Run original readdition of mean
+        if apply_mean_filter:
+            mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
+            data_r += mean_filtered[t_start:t_stop, None]
+
+        else:
+            print('Not filtering mean')
+            mean_filtered = None
+            data_r += mean[t_start:t_stop, None]
+
+    if binary_threshold:
+        data_binary = np.zeros(data_r)
+        data_binary[data_r > 0] = 255
+        data_r = data_binary
 
     print('Done!')
 
@@ -427,6 +506,203 @@ def rebuild(components: dict,
 
     return data_r
 
+def rebuild_split_components(components: dict,
+            artifact_components: np.ndarray = None,
+            t_start: int = None,
+            t_stop: int = None,
+            apply_mean_filter: bool = True,
+            mlow: float = 0.5,
+            mhigh: float = 1.0,
+            apply_component_filter: bool = False,
+            chigh: float = 1.0,
+            apply_component_threshold: bool = False,
+            cthresh: float = 2.0,
+            apply_masked_mean: bool = False,
+            binary_threshold: bool = False,
+            filter_method: str = 'butterworth_highpass',
+            fps: float = 7.5,
+            include_noise: bool = True):
+    '''
+    Rebuild original vector space based on a subset of principal 
+    components of the data.  Eigenvectors to use are specified where 
+    artifact_components == False.  Returns a matrix data_r, the reconstructed 
+    vector projected back into its original dimensions.
+
+    Arguments:
+        components: 
+            The components from ica_project.  artifact_components must be assigned to components before rebuilding, or passed in explicitly
+        artifact_components:
+            Overrides the artifact_components key in components, to rebuild all components except those specified
+        t_start: 
+            The frame to start rebuilding the movie at.  If none is provided, the rebuilt movie starts at the first frame
+        t_stop: 
+            The frame to stop rebuilding the movie at.  If none is provided, the rebuilt movie ends at the last frame
+        apply_mean_filter:
+            Whether to apply a filter to the mean signal.
+        mlow:
+            A float determining the highpass cutoff for the mean filter, if used.
+        mhigh:
+            A float determining the lowpass cutoff for the mean filter, if used.
+        apply_component_filter:
+            Whether to apply a butterworth_lowpass filter to IC timecourses before rebuild.
+        chigh:
+            A float determining the lowpass cutoff for the component filter, if used.
+        apply_component_threshold:
+            Whether to apply a z-score threshold on the component timeseries.
+        cthresh:
+            A float determining the z-score threshold for the component threshold, if used.
+        apply_masked_mean:
+            If True, only re-adds the mean signal to pixels where at least one IC is defined. To be used for thresholded ICs.
+        filter_method:
+            The filter method to apply to the mean. Choose from 'butterworth_bandpass', 'butterworth_lowpass', 'butterworth_highpass', or 'constant'. Behaviour for 'wavelet' as yet undefined.
+        fps:
+            A float determining the fps for the source video.
+        include_noise:
+            Whether to include noise components when rebuilding.  If noise_components should not be included in the rebuilt movie, set this to False
+
+    Returns:
+        data_r: The ICA filtered video.
+    '''
+    print('\nRebuilding Data from Selected ICs\n-----------------------')
+
+    if type(components) is str:
+        f = hdf5manager(components)
+        components = f.load()
+
+    assert type(components) is dict, 'Components were not in format expected'
+
+    eig_vec = components['eig_vec']
+    eig_mix = components['eig_mix']
+    roimask = components['roimask']
+    shape = components['shape']
+    mean = components['mean']
+    n_components = components['n_components']
+    dtype = np.float32
+
+    t, x, y = shape
+    l = eig_vec[:, 0].size
+
+    if mean.ndim > 1:  # why is there sometimes an extra dimension added?
+        mean = mean.flatten()
+
+    if artifact_components is None:
+        artifact_components = components['artifact_components']
+    elif artifact_components == 'none':
+        print('including all components')
+        artifact_components = np.zeros(n_components)
+    
+    if ((not include_noise) and ('noise_components' in components.keys())):
+        print('Not rebuilding noise components')
+        artifact_components += components['noise_components']
+        artifact_components[np.where(artifact_components > 1)] = 1
+
+    reconstruct_indices = np.where(artifact_components == 0)[0]
+
+    if reconstruct_indices.size == 0:
+        print('No indices were selected for reconstruction.')
+        print('Returning empty matrix...')
+        data_r = np.zeros((t, x, y), dtype='uint8')
+        data_r = data_r[t_start:t_stop]
+        return data_r
+
+    n_components = reconstruct_indices.size
+
+    # Make sure vector extracted properly matches the roimask given.
+    if roimask is None:
+        assert eig_vec[:, 0].size == x * y, (
+            "Eigenvector size isn't compatible with the shape of the output "
+            'matrix')
+    else:
+        maskind = np.where(roimask.flat == 1)
+        assert eig_vec[:,0].size == maskind[0].size, \
+        "Eigenvector size is not compatible with the masked region's size"
+
+    # Filter component timecourses
+    if apply_component_filter:
+        lpf_eig_mix = filter_components(eig_mix, fps=fps, high_cutoff=chigh)
+        eig_mix = lpf_eig_mix
+
+    # Threshold component timecourses
+    if apply_component_threshold:
+        thresh_eig_mix = threshold_components(eig_mix, thresh_param=cthresh)
+        eig_mix = thresh_eig_mix
+
+    if (t_start == None):
+        t_start = 0
+
+    if (t_stop == None):
+        t_stop = eig_mix.shape[0]
+
+    if (t_stop - t_start) is not shape[0]:
+        shape = (t_stop - t_start, shape[1], shape[2])
+
+    t = t_stop - t_start
+
+    print('\nRebuilding ICA...')
+    print('number of elements included:', n_components)
+    print('eig_vec:', eig_vec.shape)
+    print('eig_mix:', eig_mix.shape)
+
+    print('\nReconstructing....')
+    data_c = []
+    t = 1
+    for i in reconstruct_indices:
+        data_r = np.dot(eig_vec[:, i],
+                        eig_mix[t_start:t_stop, i].T).T
+        # spatiotemporal_event_masks = data_r[data_r > 0]
+
+        if apply_masked_mean:
+            # Apply mean to masks only, zeroing unmasked pixels
+            spatiotemporal_event_masks = np.zeros_like(data_r)
+            spatiotemporal_event_masks[data_r > 0] = 255
+            spatiotemporal_event_masks = spatiotemporal_event_masks.astype(bool)
+            masks = components['thresh_masks']
+            assert masks is not None, \
+            "Masks have not been assigned to dictionary"
+            if apply_mean_filter:
+                combined_mask = np.any(masks[:, i], axis=1)
+                mean_to_add = np.zeros_like(data_r)
+                mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
+                mean_to_add[:, combined_mask] = mean_filtered[t_start:t_stop, None]
+                data_r += mean_to_add
+                data_r[~spatiotemporal_event_masks] = 0
+
+            else:
+                print('Not filtering mean')
+                combined_mask = np.any(masks[:, i], axis=1)
+                mean_to_add = np.zeros_like(data_r)
+                mean_filtered = None
+                mean_to_add[:, combined_mask] = mean[t_start:t_stop, None]
+                data_r += mean_to_add
+                data_r[~spatiotemporal_event_masks] = 0
+        else:
+            # Run original readdition of mean
+            if apply_mean_filter:
+                mean_filtered = filter_mean(mean, filter_method, low_cutoff=mlow, high_cutoff=mhigh, fps=fps)
+                data_r += mean_filtered[t_start:t_stop, None]
+
+            else:
+                print('Not filtering mean')
+                mean_filtered = None
+                data_r += mean[t_start:t_stop, None]
+
+        if binary_threshold:
+            data_binary = np.zeros(data_r)
+            data_binary[data_r > 0] = 255
+            data_r = data_binary
+
+        print('Done!')
+
+        if roimask is None:
+            data_r = data_r.reshape(shape)
+        else:
+            reconstructed = np.zeros((x * y, t), dtype=dtype)
+            reconstructed[maskind] = data_r.swapaxes(0, 1)
+            reconstructed = reconstructed.swapaxes(0, 1)
+            data_r = reconstructed.reshape(t, x, y)
+            data_c.append(data_r)
+    data_r = np.stack(data_c, axis=0)
+    return data_r
 
 def approximate_svd_linearity_transition(eig_val: np.ndarray):
     '''
@@ -508,12 +784,243 @@ def filter_mean(mean: np.ndarray,
         wavelet = waveletAnalysis(mean.astype('float64'), fps=fps)
         mean_filtered = wavelet.noiseFilter(upperPeriod=1 / low_cutoff)
 
+    elif filter_method == 'constant':
+        mean_template = np.zeros_like(mean)
+        meanest_mean = np.mean(mean)
+        mean_filtered = mean_template + meanest_mean
+        print('Mean set as constant: dfof = ' + str(meanest_mean))
+
     else:
         raise Exception("Filter method '" + str(filter_method)\
          + "' not supported!\n\t Supported methods: butterworth, butterworth_bandpass, wavelet")
 
     return mean_filtered
 
+
+def filter_components(eig_mix: np.ndarray,
+                      fps: float = 7.5,
+                      high_cutoff: float = 0.5):
+    '''
+    Applies a butterworth low pass filter to the IC timecourses.
+
+    Arguments:
+        eig_mix: 
+            The mixing matrix containing IC timecourses.
+        fps:
+            Sampling rate of the video.
+        high_cutoff:
+            The frequency cutoff to apply the low pass filter at.
+
+    Returns:
+        lpf_eig_mix: The filtered IC timecourses reconstructed as the eig_mix matrix.
+    '''
+    
+    print('Filtering component timecourses using butterworth_lowpass at '+ str(high_cutoff) +'Hz...')
+    timecourses = eig_mix.T
+    lpf_timecourses = np.zeros_like(timecourses)
+    for index in range(timecourses.shape[0]):
+        lpf_timecourses[index] = butterworth(timecourses[index], fps=fps, high=high_cutoff)
+    lpf_eig_mix = lpf_timecourses.T
+
+    return lpf_eig_mix
+
+def threshold_components(eig_mix: np.ndarray,
+                         thresh_param: float):
+    '''
+    Applies a z-score threshold to the IC timecourses.
+
+    Arguments:
+        eig_mix: 
+            The mixing matrix containing IC timecourses.
+        thresh_param:
+            Z-score thresholding parameter (standard deviations).
+
+    Returns:
+        thresh_eig_mix: The thresholded IC timecourses reconstructed as the eig_mix matrix.
+    '''
+
+    print('Thresholding component timecourses using z-score: >' + str(thresh_param) +'s.d.')
+    timecourses = eig_mix.T
+    thresh_timecourses = np.zeros_like(timecourses)
+    for index in range(timecourses.shape[0]):
+        timecourse = timecourses[index]
+        mean = np.mean(timecourse)
+        std = np.std(timecourse)
+        threshold = mean + thresh_param*std
+        timecourse[np.abs(timecourse) < np.abs(threshold)] = 0
+        thresh_timecourses[index] = timecourse
+    thresh_eig_mix = thresh_timecourses.T
+
+    return thresh_eig_mix
+
+def threshold_by_domains(components: dict,
+                   blur: int = 1,
+                   min_mask_size: int = 64,
+                   thresh_type: str = 'max',
+                   thresh_param: float = None,
+                   schematic: bool = False):
+    '''
+    Function based on modified get_domain_map(). Thresholds ICs using a variety of methods for selective rebuild.
+
+    Arguments:
+        components: 
+            The dictionary of components returned from seas.ica.project.  ROIs are most interesting if artifacts has already been assigned through seas.gui.run_gui.
+        blur: 
+            An odd integer kernel Gaussian blur to run before segmenting.  ROIs look smoother with larger blurs, but you can lose some smaller domains.
+        min_mask_size:
+            An integer determining the minimum ROIs passed from each thresholded IC.
+        thresh_type:
+            A string used to determine IC threshold method. Choose from either 'max', 'z-score' or 'percentile'.
+        thresh_param:
+            A float used to determine the parameter for the given thresh_type. For 'z-score', this is the z-score threshold (eg; 2.0 for 2std). For 'percentile' this is the percentile used to threshold (eg; 95th percentile = 0.95).
+
+    Returns:
+        output: a dictionary containing the results of the operation, containing the following keys
+            domain_blur:
+                The Gaussian blur value used when generating the map
+            eig_vec: 
+                The thresholded eigenvectors (ICs).  
+            thresh_masks: 
+                The boolean masks used to threshold eig_vec.
+    '''
+    print('\nExtracting Domain ROIs\n-----------------------')
+    output = {}
+    output['domain_blur'] = blur
+
+    eig_vec = components['eig_vec'].copy()
+
+    shape = components['shape']
+    shape = (shape[1], shape[2])
+
+    if 'roimask' in components.keys() and components['roimask'] is not None:
+        roimask = components['roimask']
+        maskind = np.where(roimask.flat == 1)[0]
+    else:
+        roimask = None
+
+    if 'artifact_components' in components.keys():
+        artifact_components = components['artifact_components']
+
+        print('Switching to signal indices only for domain detection')
+
+        if 'noise_components' in components.keys():
+            noise_components = components['noise_components']
+
+            signal_indices = np.where((artifact_components +
+                                       noise_components) == 0)[0]
+        else:
+            print('no noise components found')
+            signal_indices = np.where(artifact_components == 0)[0]
+        # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
+    
+    mask = np.zeros_like(eig_vec, dtype = bool)
+    print(f'eig_vec shape is: {eig_vec.shape}')
+
+    match thresh_type:
+        case 'max':
+            # Return indices across each eig_vec (loading vector for component) where loading is max
+            threshold_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
+            # Then threshold by clearing eig_vec outside of max indices
+            mask[np.arange(eig_vec.shape[0]), threshold_ROIs_vector] = True
+        case 'z-score':
+            mean_ROIs_vector = np.nanmean(eig_vec, axis=0)
+            std_ROIs_vector = np.nanstd(eig_vec, axis=0)
+            z_ROIs_vector = (eig_vec - mean_ROIs_vector)/std_ROIs_vector
+            for i in np.arange(eig_vec.shape[1]):
+                abs_z = np.abs(z_ROIs_vector[:, i])
+                mask[:, i] = abs_z > thresh_param
+                # event = abs_z[mask[i, :]]
+                # Deprecated but produced an interesting result
+                # if schematic and event.size != 0:
+                #     schem_thresh = np.percentile(event, 75) 
+                #     mask[i, :] = abs_z > schem_thresh
+        case 'percentile':
+            flipped = components['flipped']
+            # Flip ICs where necessary using flipped from dict
+            flipped_threshold_vec = np.multiply(flipped, eig_vec)
+            # Calculate 95 percentile cutoff for each IC
+            cutoff_vector = np.percentile(flipped, thresh_param, axis=0)
+            # Mask for all values above cutoff
+            for i in np.arange(eig_vec.shape[0]):
+                mask[i, :] = flipped_threshold_vec[i] > cutoff_vector[i]
+        case 'max_value':
+            max_ROIs_vector = np.max(eig_vec, axis=0)
+            print(f'max_ROIs_vector shape is: {max_ROIs_vector.shape}')
+            for i in np.arange(eig_vec.shape[1]):
+                mask[:, i] = eig_vec[:, i] >= max_ROIs_vector[i]
+        case _:
+            print("Threshold type is neither max nor percentile.")
+
+    # Filter small mask ROIs and smooth using blur
+    if blur:
+        print('blurring domains...')
+        assert type(blur) is int, 'blur was not valid'
+        if blur % 2 != 1:
+            blur += 1
+
+        eigenmask = np.zeros(shape, dtype=bool)
+        eigenbrain = np.empty(shape)
+        eigenbrain[:] = np.nan
+
+        for index in range(mask.shape[1]):
+
+            if roimask is not None:
+                eigenmask.flat[maskind] = mask.T[index]
+                # Remove small mask objects
+                filtered = remove_small_objects(eigenmask, min_size=min_mask_size, connectivity=1)
+                filtered_float = filtered.astype(np.float64)
+                eigenbrain.flat[maskind] = filtered_float.flat[maskind]
+                # Then blur
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                mask.T[index] = blurred.flat[maskind]
+            else:
+                eigenbrain.flat = mask.T[index]
+                filtered = remove_small_objects(eigenbrain, min_size=min_mask_size, connectivity=1)
+                filtered_float = filtered.astype(np.float64)
+                eigenbrain.flat[maskind] = filtered_float.flat
+                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                mask.T[index] = blurred.flat
+
+    if schematic:
+        eigenmask = np.zeros(shape, dtype=np.uint8)
+        eigenbrain = np.empty(shape)
+        eigenbrain[:] = np.nan
+
+        for i in range(mask.shape[1]):
+            event_schematic = np.zeros(shape, dtype=np.uint8)
+            eigenmask.flat[maskind] = mask.T[i]
+            eigenbrain.flat[maskind] = eig_vec.T[i]
+            # print("i is:", i)
+            # print(eigenmask)
+            if eigenmask.any():
+                # tif.imwrite("/home/apluff/dev/test_data/eigenmasks/sub-070_eigenmask"+str(i)+".tif", eigenmask, imagej=True)
+                labelled, num_features = ndimage.label(eigenmask)
+                # print(labelled)
+                # print("labelled contains values:", np.unique(labelled))
+                # print("num_features is:", num_features)
+                for j in range(1, num_features + 1):
+                    centroid = ndimage.center_of_mass(eigenmask, 
+                                                      labels = labelled,
+                                                      index = j)
+                    # print("j is:", j)
+                    # print("centroid is:", centroid)
+                    int_centroid = tuple(int(x) for x in centroid)
+                    event_size = np.sum(labelled, where = labelled == j)/j
+                    schem_radius = int(np.sqrt(event_size/np.pi))
+                    rr, cc = draw.disk(int_centroid, schem_radius, shape = shape)
+                    event_schematic[rr, cc] = 255
+                    # print("mask shape is:", mask.shape)
+                    # print("event_schematics shape is:", event_schematic.shape)
+                    mask.T[i] = event_schematic.flat[maskind]
+    
+    mask_bool = mask.astype(bool)
+    eig_vec[~mask_bool] = 0
+
+    output['thresh_masks'] = mask
+    # output['thresh_vec'] = eig_vec
+    output['eig_vec'] = eig_vec
+    
+    return output
 
 def rebuild_mean_roi_timecourse(components: np.ndarray,
                                 mask: np.ndarray,
@@ -637,7 +1144,7 @@ def rebuild_eigenbrain(eig_vec: np.ndarray,
         else:
             eigenbrains = np.empty(
                 (roimask.shape[0], roimask.shape[1], eig_vec.shape[1]))
-            eigenbrains[:] = np.NAN
+            eigenbrains[:] = np.nan
             eigenbrains[x, y, :] = eig_vec
         eigenbrains = np.swapaxes(eigenbrains, 0, 2)
         eigenbrains = np.swapaxes(eigenbrains, 1, 2)
@@ -654,11 +1161,10 @@ def rebuild_eigenbrain(eig_vec: np.ndarray,
             eigenbrain = eigenbrain.reshape(eigb_shape)
         else:
             eigenbrain = np.empty(roimask.shape)
-            eigenbrain[:] = np.NAN
+            eigenbrain[:] = np.nan
             eigenbrain.flat[maskind] = eig_vec.T[index]
 
         return eigenbrain
-
 
 def filter_comparison(components: dict,
                       downsample: int = 4,
