@@ -4,6 +4,9 @@ Functions for creating and manipulating domain maps, created from maximum projec
 
 Authors: Sydney C. Weiser
 Date: 2019-06-16
+
+Updates by Dylan A. Black
+
 '''
 import numpy as np
 import os
@@ -23,7 +26,10 @@ def get_domain_map(components: dict,
                    map_only: bool = True,
                    apply_filter_mean: bool = True,
                    max_loops: int = 2,
-                   ignore_small: bool = True):
+                   ignore_small: bool = True,
+                   conf_mag_percentile: float | None = None,
+                   conf_margin_percentile: float | None = None,
+                   erode_ring = 0):
     '''
     Creates a domain map from extracted independent components.
     A pixelwise maximum projection of the blurred signal components is taken through the n_components axis, to create a flattened representation of where a domain was maximally significant across the cortical surface.
@@ -92,38 +98,90 @@ def get_domain_map(components: dict,
 
     if blur:
         print('blurring domains...')
-        assert type(blur) is int, 'blur was not valid'
+        assert isinstance(blur, int), 'blur was not valid'
         if blur % 2 != 1:
             blur += 1
 
-        eigenbrain = np.empty(shape)
-        eigenbrain[:] = np.NAN
+        eigenbrain = np.zeros(shape, dtype=float)  # shape is (x, y)
 
         for index in range(eig_vec.shape[1]):
-
+            # write this component into the 2D buffer
             if roimask is not None:
-                eigenbrain.flat[maskind] = eig_vec.T[index]
-                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
+                eigenbrain.fill(0.0)                         # clear from previous loop
+                eigenbrain.flat[maskind] = eig_vec.T[index]  # fill ROI pixels only
+            else:
+                eigenbrain.flat = eig_vec.T[index]           # whole FOV
+
+            # Original-style Gaussian blur with constant (zero) border
+            blurred = cv2.GaussianBlur(
+                eigenbrain, (blur, blur), 0, 0, borderType=cv2.BORDER_CONSTANT
+            )
+
+            # write back only ROI pixels
+            if roimask is not None:
                 eig_vec.T[index] = blurred.flat[maskind]
             else:
-                eigenbrain.flat = eig_vec.T[index]
-                blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
                 eig_vec.T[index] = blurred.flat
+    
+    if (conf_mag_percentile is not None) or (conf_margin_percentile is not None) or (erode_ring) > 0:
+        A = np.abs(eig_vec) # (n_roi_pixels, K)
+        # top-2 magnitudes per pixel
+        if A.shape[1] >= 2:
+            idx2 = np.argpartition(A, kth=-2, axis=1)[:, -2:]
+            top = A[np.arange(A.shape[0])[:, None], idx2]
+            t1 = top.max(axis=1) # strongest |loading|
+            t2 = top.min(axis=1) # runner-up
+        else:
+            t1 = A[:, 0]
+            t2 = np.zeros_like(t1)
+        margin = t1 - t2
 
+        confident = np.ones(A.shape[0], dtype=bool)
+        if conf_mag_percentile is not None:
+            # threshold on |loading| strength
+            pos = t1[t1 > 0]
+            tau_abs = np.percentile(pos, conf_mag_percentile) if pos.size else 0.0
+            confident &= (t1 >= tau_abs)
+        if conf_margin_percentile is not None:
+            posm = margin[margin > 0]
+            tau_margin = np.percentile(posm, conf_margin_percentile) if posm.size else 0.0
+            confident &= (margin >= tau_margin)
+
+        # optional ROI border erosion
+        if (roimask is not None) and (erode_ring > 0):
+            border_ok_full = scipy.ndimage.binary_erosion(roimask.astype(bool),
+                                                          iterations=erode_ring).ravel()
+            border_ok_roi = border_ok_full[maskind]
+            confident &= border_ok_roi
+    else:
+        confident = None
+
+    # Winnertakeall assignment
     domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1).astype('float16')
+    if confident is not None:
+        domain_ROIs_vector[~confident] = np.nan
 
     if blur:
+        # keep as in original; harmless if no NaNs present
         domain_ROIs_vector[np.isnan(eig_vec[:, 0])] = np.nan
 
+    # Build 2-D assignment image
     if roimask is not None:
-        domain_ROIs = np.empty(shape)
-        domain_ROIs[:] = np.NAN
+        domain_ROIs = np.empty(shape, dtype=float)
+        domain_ROIs[:] = np.nan
         domain_ROIs.flat[maskind] = domain_ROIs_vector
-
     else:
         domain_ROIs = np.reshape(domain_ROIs_vector, shape)
 
     output['component_assignment'] = domain_ROIs.copy()
+
+    # record confidence settings if used
+    if (conf_mag_percentile is not None) or (conf_margin_percentile is not None) or (erode_ring > 0):
+        output['confidence_params'] = dict(
+            conf_mag_percentile=conf_mag_percentile,
+            conf_margin_percentile=conf_margin_percentile,
+            erode_ring=erode_ring
+        )
 
     # remove small domains, separate if more than one domain per component
     ndomains = np.nanmax(domain_ROIs)
@@ -700,7 +758,7 @@ def threshold_by_domains(components: dict,
             blur += 1
 
         eigenbrain = np.empty(shape)
-        eigenbrain[:] = np.NAN
+        eigenbrain[:] = np.nan
 
         for index in range(eig_vec.shape[1]):
 
@@ -729,7 +787,7 @@ def threshold_by_domains(components: dict,
 
     # if roimask is not None:
     #     domain_ROIs = np.empty(shape)
-    #     domain_ROIs[:] = np.NAN
+    #     domain_ROIs[:] = np.nan
     #     domain_ROIs.flat[maskind] = domain_ROIs_vector
 
     # else:

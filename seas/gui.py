@@ -334,7 +334,7 @@ def run_gui(components: dict,
             tk.Frame.__init__(self, parent)  # Parent is controller.
 
             # Create frame for each component, initialize component indices.
-            self.n_images = 15
+            self.n_images = 8 # changed from 15
             self.current_page_number = 0
 
             # Initialize the title.

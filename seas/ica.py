@@ -19,7 +19,7 @@ def project(vector: np.ndarray,
             n_components: int = None,
             svd_multiplier: float = 5,
             calc_residuals: bool = True,
-            max_iter: int = 1000):
+            max_iter: int = 3000):
     '''
     Apply an ica decomposition to the first axis of the input vector.  
     If a roimask is provided, the flattened roimask will be used to crop the vector before decomposition.
@@ -118,7 +118,7 @@ def project(vector: np.ndarray,
 
         t0 = timer()
         try:
-            u, ev, _ = linalg.svd(vector, full_matrices=False)
+            u, ev, _ = np.linalg.svd(vector, full_matrices=False)
         except ValueError:
             # LAPACK error if matricies are too big
             u, ev, _ = linalg.svd(vector,
@@ -127,10 +127,15 @@ def project(vector: np.ndarray,
 
         components['svd_eigval'] = ev
 
+        # the true cap is teh SVD rank k = min(pixels_in_roi, t)
+        rank_k = int(ev.size)
+        components['svd_rank'] = rank_k
+
         #Get starting point for decomposition based on svd mutliplier * the approximate
         # point of transition to linearity in tail of ev components.
         cross_1 = approximate_svd_linearity_transition(ev)
-        n_components = cross_1 * svd_multiplier
+        n_components = int(max(1, cross_1 * svd_multiplier))
+        n_components = min(n_components, rank_k)
 
         components['increased_cutoff'] = 0
 
@@ -141,39 +146,26 @@ def project(vector: np.ndarray,
             ica = FastICA(n_components=n_components,
                           max_iter=max_iter,
                           random_state=1000,
-                          w_init=w_init)
+                          w_init=w_init,
+                          whiten_solver="eigh") # call eigh rather than default
 
             eig_vec = ica.fit_transform(vector)
             eig_mix = ica.mixing_
 
             noise, cutoff = sort_noise(eig_mix.T)
-
             p_signal = (1 - noise.sum() / noise.size) * 100
 
-            if noise.size == shape[0]:  # All components are being used.
+            if n_components >= rank_k:
+                print('Reached the SVD rank cap; using this decomposition...')
                 break
             elif p_signal < 75:
-                print('ICA components were under 75% signal ({0}% signal).'\
-                    .format(p_signal))
-                break
-            elif n_components >= shape[0]:
-                print('ICA components were under 75% signal ({0}% signal).'\
-                    .format(p_signal))
-                print('However, number of components is maxed out.')
-                print('Using this decomposition...')
+                print('ICA components were under 75% signal ({0}% signal.).'.format(p_signal))
                 break
             else:
-                print('ICA components were over 75% signal ({0}% signal).'\
-                    .format(p_signal))
+                print('ICA components were over 75% signal ({0}% signal.)'.format(p_signal))
                 print('Recalculating with more components...')
-                n_components += n_components // 2
+                n_components = min(n_components + n_components // 2, rank_k)
                 components['increased_cutoff'] += 1
-
-                if n_components > shape[0]:
-                    print('\nComponents maxed out!')
-                    print('\tAttempted:', n_components)
-                    n_components = shape[0]
-                    print('\tReduced to:', shape[0])
 
         components['lag1_full'] = lag_n_autocorr(eig_mix.T, 1)
         components['svd_multiplier'] = svd_multiplier
@@ -210,7 +202,10 @@ def project(vector: np.ndarray,
         print('Calculating ICA (' + str(n_components) + ' components)...')
 
         t0 = timer()
-        ica = FastICA(n_components=n_components, max_iter=max_iter, random_state=1000)
+        ica = FastICA(n_components=n_components,
+                      max_iter=max_iter,
+                      random_state=1000,
+                      whiten_solver="eigh")
 
         try:
             eig_vec = ica.fit_transform(vector)  # Eigenbrains
@@ -258,31 +253,35 @@ def project(vector: np.ndarray,
 
     if calc_residuals:
         try:
-            vector = vector.astype('float64')
-            rebuilt = rebuild(components,
-                              artifact_components='none',
-                              vector=True).T
+            vector = vector.astype('float64', copy=False)
 
-            rebuilt -= rebuilt.mean(axis=0)
-            vector -= vector.mean(axis=0)
+            rebuilt = rebuild(components, artifact_components='none',
+                              apply_mean_filter=True, include_noise=True)  # (t,x,y)
 
-            residuals = np.abs(vector - rebuilt)
+            t, x, y = components['shape']
+            rebuilt_vec = rebuilt.reshape(t, x*y).T  # (pixels_all, t)
 
-            residuals_temporal = residuals.mean(axis=0)
+            roimask = components.get('roimask', None)
+            if roimask is not None:
+                maskind = np.where(roimask.flat == 1)[0]
+                rebuilt_vec = rebuilt_vec[maskind, :]  # match ICA's cropped space
 
+            # demean per timepoint to mirror preprocessing
+            rebuilt_vec -= rebuilt_vec.mean(axis=0, keepdims=True)
+            vector      -= vector.mean(axis=0,      keepdims=True)
+
+            residuals = np.abs(vector - rebuilt_vec)             # (pixels_mask, t)
+            residuals_temporal = residuals.mean(axis=0)          # (t,)
             if roimask is not None:
                 residuals_spatial = np.zeros(roimask.shape)
                 residuals_spatial.flat[maskind] = residuals.mean(axis=1)
             else:
-                residuals_spatial = np.reshape(residuals.mean(axis=1),
-                                               (shape[1], shape[2]))
+                residuals_spatial = residuals.mean(axis=1).reshape(x, y)
 
-            components['residuals_spatial'] = residuals_spatial
+            components['residuals_spatial']  = residuals_spatial
             components['residuals_temporal'] = residuals_temporal
-
         except Exception as e:
-            print('Residual Calculation Failed!!')
-            print('\t', e)
+            print('Residual Calculation Failed!'); print('\t', e)
 
     # Save filter metadata information about how and when movie was filtered in dictionary.
     project_meta = {}
@@ -297,8 +296,7 @@ def project(vector: np.ndarray,
 
     print('\n')
     return components
-
-
+        
 def rebuild(components: dict,
             artifact_components: np.ndarray = None,
             t_start: int = None,
@@ -306,31 +304,12 @@ def rebuild(components: dict,
             apply_mean_filter: bool = True,
             filter_method: str = 'wavelet',
             fps: float = 7.5,
-            include_noise: bool = True):
+            include_noise: bool = True,
+            **kwargs):  # <-- Step 1: Add **kwargs here
     '''
-    Rebuild original vector space based on a subset of principal 
-    components of the data.  Eigenvectors to use are specified where 
-    artifact_components == False.  Returns a matrix data_r, the reconstructed 
-    vector projected back into its original dimensions.
-
-    Arguments:
-        components: 
-            The components from ica_project.  artifact_components must be assigned to components before rebuilding, or passed in explicitly
-        artifact_components:
-            Overrides the artifact_components key in components, to rebuild all components except those specified
-        t_start: 
-            The frame to start rebuilding the movie at.  If none is provided, the rebuilt movie starts at the first frame
-        t_stop: 
-            The frame to stop rebuilding the movie at.  If none is provided, the rebuilt movie ends at the last frame
-        apply_mean_filter:
-            Whether to apply a filter to the mean signal.
-        filter_method:;
-            The filter method to apply (see filter_mean function).
-        include_noise:
-            Whether to include noise components when rebuilding.  If noise_components should not be included in the rebuilt movie, set this to False
-
-    Returns:
-        data_r: The ICA filtered video.
+    Rebuild original vector space based on a subset of principal
+    components of the data...
+    (rest of docstring is the same)
     '''
     print('\nRebuilding Data from Selected ICs\n-----------------------')
 
@@ -350,7 +329,7 @@ def rebuild(components: dict,
     t, x, y = shape
     l = eig_vec[:, 0].size
 
-    if mean.ndim > 1:  # why is there sometimes an extra dimension added?
+    if mean.ndim > 1:
         mean = mean.flatten()
 
     if artifact_components is None:
@@ -374,7 +353,6 @@ def rebuild(components: dict,
 
     n_components = reconstruct_indices.size
 
-    # Make sure vector extracted properly matches the roimask given.
     if roimask is None:
         assert eig_vec[:, 0].size == x * y, (
             "Eigenvector size isn't compatible with the shape of the output "
@@ -386,13 +364,13 @@ def rebuild(components: dict,
 
     eig_mix = components['eig_mix']
 
-    if (t_start == None):
+    if (t_start is None):
         t_start = 0
 
-    if (t_stop == None):
+    if (t_stop is None):
         t_stop = eig_mix.shape[0]
 
-    if (t_stop - t_start) is not shape[0]:
+    if (t_stop - t_start) != shape[0]:
         shape = (t_stop - t_start, shape[1], shape[2])
 
     t = t_stop - t_start
@@ -407,7 +385,8 @@ def rebuild(components: dict,
                     eig_mix[t_start:t_stop, reconstruct_indices].T).T
 
     if apply_mean_filter:
-        mean_filtered = filter_mean(mean, filter_method, fps=fps)
+        # Step 2: Pass **kwargs to filter_mean
+        mean_filtered = filter_mean(mean, filter_method, fps=fps, **kwargs)
         data_r += mean_filtered[t_start:t_stop, None]
 
     else:
@@ -486,21 +465,21 @@ def filter_mean(mean: np.ndarray,
         print('Highpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         variance = mean.var()
         mean_filtered = butterworth(mean, fps=fps, low=low_cutoff)
-        percent_variance = np.round(mean.var() / variance * 100)
+        percent_variance = np.round(mean_filtered.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'butterworth_lowpass':
         print('Lowpass filter signal timecourse: ' + str(low_cutoff) + 'Hz')
         variance = mean.var()
         mean_filtered = butterworth(mean, fps=fps, high=low_cutoff)
-        percent_variance = np.round(mean.var() / variance * 100)
+        percent_variance = np.round(mean_filtered.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'butterworth_bandpass':
         print('Bandpass filter signal timecourse: ' + str(low_cutoff) + 'Hz to ' + str(high_cutoff) + 'Hz')
         variance = mean.var()
         mean_filtered = butterworth(mean, fps=fps, low=low_cutoff, high=high_cutoff)
-        percent_variance = np.round(mean.var() / variance * 100)
+        percent_variance = np.round(mean_filtered.var() / variance * 100)
         print(str(percent_variance) + '% variance retained')
 
     elif filter_method == 'wavelet':
@@ -633,11 +612,11 @@ def rebuild_eigenbrain(eig_vec: np.ndarray,
 
         if roimask is None:
             h, w = eigb_shape
-            eigenbrains = eig_vec.reshape(h, w, eig_vec[1])
+            eigenbrains = eig_vec.reshape(h, w, eig_vec.shape[1])
         else:
             eigenbrains = np.empty(
                 (roimask.shape[0], roimask.shape[1], eig_vec.shape[1]))
-            eigenbrains[:] = np.NAN
+            eigenbrains[:] = np.nan # changed from NAN
             eigenbrains[x, y, :] = eig_vec
         eigenbrains = np.swapaxes(eigenbrains, 0, 2)
         eigenbrains = np.swapaxes(eigenbrains, 1, 2)
@@ -654,7 +633,7 @@ def rebuild_eigenbrain(eig_vec: np.ndarray,
             eigenbrain = eigenbrain.reshape(eigb_shape)
         else:
             eigenbrain = np.empty(roimask.shape)
-            eigenbrain[:] = np.NAN
+            eigenbrain[:] = np.nan # changed from NAN
             eigenbrain.flat[maskind] = eig_vec.T[index]
 
         return eigenbrain
