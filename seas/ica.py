@@ -164,7 +164,10 @@ def project(vector: np.ndarray,
             else:
                 print('ICA components were over 75% signal ({0}% signal.)'.format(p_signal))
                 print('Recalculating with more components...')
-                n_components = min(n_components + n_components // 2, rank_k)
+                n_components = min(
+                    n_components + max(1, n_components // 2),
+                    rank_k,
+                )
                 components['increased_cutoff'] += 1
 
         components['lag1_full'] = lag_n_autocorr(eig_mix.T, 1)
@@ -258,8 +261,8 @@ def project(vector: np.ndarray,
             rebuilt = rebuild(components, artifact_components='none',
                               apply_mean_filter=True, include_noise=True)  # (t,x,y)
 
-            t, x, y = components['shape']
-            rebuilt_vec = rebuilt.reshape(t, x*y).T  # (pixels_all, t)
+            n_frames, x, y = components['shape']
+            rebuilt_vec = rebuilt.reshape(n_frames, x*y).T  # (pixels_all, t)
 
             roimask = components.get('roimask', None)
             if roimask is not None:
