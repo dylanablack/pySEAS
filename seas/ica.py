@@ -1,17 +1,43 @@
 import os
 import re
 import numpy as np
+import warnings
 from datetime import datetime
 from sklearn.decomposition import FastICA
 from scipy import linalg
 from timeit import default_timer as timer
 from typing import Tuple
 
+from sklearn.exceptions import ConvergenceWarning
 from seas.waveletAnalysis import waveletAnalysis
 from seas.signalanalysis import butterworth, sort_noise, lag_n_autocorr
 from seas.hdf5manager import hdf5manager
 from seas.video import rotate, save, rescale, play, scale_video
 
+def _fit_ica_with_info(ica, vector):
+    """Fit ICA and record iteration and convergence information."""
+    caught = []
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ConvergenceWarning)
+            eig_vec = ica.fit_transform(vector)
+    finally:
+        for w in caught:
+            warnings.warn_explicit(
+                w.message, w.category, w.filename, w.lineno
+            )
+
+    info = {
+        "n_components": int(eig_vec.shape[1]),
+        "n_iter": int(ica.n_iter_),
+        "max_iter": int(ica.max_iter),
+        "convergence_warning": any(
+            issubclass(w.category, ConvergenceWarning)
+            for w in caught
+        ),
+    }
+    
+    return eig_vec, info
 
 def project(vector: np.ndarray,
             shape: Tuple[int, int, int],
@@ -65,7 +91,7 @@ def project(vector: np.ndarray,
             n_components:
                 the number of components in eig_vec (reduced to only have 25% of total components as noise)
             project_meta:
-                The metadata for the ica projection
+                The metadata for the ica projection. 'ica_fits' records each completed fit in execution order and whether convergence warning was emitted. 
             expmeta:
                 All metadata created for this class
             lag1: 
@@ -106,6 +132,8 @@ def project(vector: np.ndarray,
     components['mean'] = mean
     components['roimask'] = roimask
     components['shape'] = shape
+
+    fit_history = []
 
     if svd_multiplier is None:
         svd_multiplier = 5
@@ -149,7 +177,9 @@ def project(vector: np.ndarray,
                           w_init=w_init,
                           whiten_solver="eigh") # call eigh rather than default
 
-            eig_vec = ica.fit_transform(vector)
+            eig_vec, fit_info = _fit_ica_with_info(ica, vector)
+            fit_history.append(fit_info)
+
             eig_mix = ica.mixing_
 
             noise, cutoff = sort_noise(eig_mix.T)
@@ -211,13 +241,17 @@ def project(vector: np.ndarray,
                       whiten_solver="eigh")
 
         try:
-            eig_vec = ica.fit_transform(vector)  # Eigenbrains
+            eig_vec, fit_info = _fit_ica_with_info(ica, vector)  # Eigenbrains
         except ValueError:
             print('Calculation exceeded float32 maximum.')
             print('Trying again with float64 vector...')
             # Value error if any value exceeds float32 maximum.
             # Overcome this by converting to float64.
-            eig_vec = ica.fit_transform(vector.astype('float64'))
+            eig_vec, fit_info = _fit_ica_with_info(
+                ica, vector.astype('float64')
+            )
+
+        fit_history.append(fit_info)
 
         t = timer() - t0
         print('Independent Component Analysis took: {0} sec'.format(t))
@@ -295,6 +329,20 @@ def project(vector: np.ndarray,
     project_meta['tstmp'] = \
         datetime.now().strftime(fmt)
     project_meta['n_components'] = n_components
+    
+    project_meta['ica_fits'] = {
+        key: np.asarray(
+            [record[key] for record in fit_history],
+            dtype=dtype,
+        )
+        for key, dtype in (
+            ('n_components', np.int64),
+            ('n_iter', np.int64),
+            ('max_iter', np.int64),
+            ('convergence_warning', np.bool_),
+        )
+    }
+    
     components['project_meta'] = project_meta
 
     print('\n')
