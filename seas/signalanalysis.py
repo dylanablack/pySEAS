@@ -128,8 +128,8 @@ def butterworth(data: np.ndarray,
 
     Arguments:
         data: A 1-D time series array to filter.
-        high: The high pass filter to apply.
-        low: The low pass filter to apply.
+        high: Upper frequency cutoff in Hz.
+        low: Lower frequency cutoff in Hz.
         fps: The number of frames per second of the input data.
         order: The butterworth filter order to apply.
 
@@ -160,11 +160,11 @@ def butterworth(data: np.ndarray,
         b, a = butter_bandpass(low, high, fps, order=order)
         data = signal.filtfilt(b, a, data)
 
-    if low is not None:
+    elif low is not None:
         b, a = butter_highpass(low, fps, order=order)
         data = signal.filtfilt(b, a, data)
 
-    if high is not None:
+    elif high is not None:
         b, a = butter_lowpass(high, fps, order=order)
         data = signal.filtfilt(b, a, data)
 
