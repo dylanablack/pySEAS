@@ -736,20 +736,20 @@ def threshold_by_domains(components: dict,
     else:
         roimask = None
 
-    if 'artifact_components' in components.keys():
-        artifact_components = components['artifact_components']
+    eligible = np.ones(eig_vec.shape[1], dtype=bool)
 
-        print('Switching to signal indices only for domain detection')
+    for key in ("artifact_components", "noise_components"):
+        flags = components.get(key)
+        if flags is not None:
+            flags = np.asarray(flags)
+            if flags.shape != eligible.shape:
+                raise ValueError(f"{key} must have one flag per component")
+            eligible &= (flags == 0)
+    signal_indices = np.flatnonzero(eligible)
 
-        if 'noise_components' in components.keys():
-            noise_components = components['noise_components']
-
-            signal_indices = np.where((artifact_components +
-                                       noise_components) == 0)[0]
-        else:
-            print('no noise components found')
-            signal_indices = np.where(artifact_components == 0)[0]
-        # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
+    if signal_indices.size == 0:
+        raise ValueError("No signal components available for domain thresholding")
+    # eig_vec = eig_vec[:, signal_indices] # Don't change number of ICs, we're updating back to dict
 
     if blur:
         print('blurring domains...')
@@ -771,15 +771,20 @@ def threshold_by_domains(components: dict,
                 blurred = cv2.GaussianBlur(eigenbrain, (blur, blur), 0)
                 eig_vec.T[index] = blurred.flat
 
-    # This is the money section, return indices across each eig_vec (loading vector for component) where loading is max
-    domain_ROIs_vector = np.argmax(np.abs(eig_vec), axis=1)
-    # Then threshold by clearing eig_vec outside of max indices
+    # Find winners among eligible components only. 
+    local_winners = np.argmax(
+        np.abs(eig_vec[:, signal_indices]),
+        axis=1,
+    )
+
+    # Convert subset positions back to original component indices
+    winners = signal_indices[local_winners]
+
     mask = np.zeros_like(eig_vec, dtype=bool)
-    mask[np.arange(eig_vec.shape[0]), domain_ROIs_vector] = True
+    mask[np.arange(eig_vec.shape[0]), winners] = True
     eig_vec[~mask] = 0
 
     output['eig_vec'] = eig_vec
-
     return output
 
     # if blur:

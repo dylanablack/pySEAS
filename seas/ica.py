@@ -332,17 +332,21 @@ def rebuild(components: dict,
     if mean.ndim > 1:
         mean = mean.flatten()
 
+    # Resolve which artifact flags to use.
     if artifact_components is None:
         artifact_components = components['artifact_components']
-    elif artifact_components == 'none':
-        print('including all components')
-        artifact_components = np.zeros(n_components)
-    elif ((not include_noise) and ('noise_components' in components.keys())):
-        print('Not rebuilding noise components')
-        artifact_components += components['noise_components']
-        artifact_components[np.where(artifact_components > 1)] = 1
+    elif isinstance(artifact_components, str) and artifact_components == 'none':
+        artifact_components = np.zeros(n_components, dtype=bool)
+    
+    # Work on a separate exclusion mask. 
+    excluded = np.array(artifact_components, dtype=bool, copy=True)
 
-    reconstruct_indices = np.where(artifact_components == 0)[0]
+    # Apply noise exclusion independently of artifact selection. 
+    if not include_noise and 'noise_components' in components:
+        print('Not rebuilding noise components')
+        excluded |= np.asarray(components['noise_components'], dtype=bool)
+
+    reconstruct_indices = np.where(~excluded)[0]
 
     if reconstruct_indices.size == 0:
         print('No indices were selected for reconstruction.')
