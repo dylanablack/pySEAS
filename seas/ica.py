@@ -89,7 +89,7 @@ def project(vector: np.ndarray,
             eig_vec: 
                 the eigenvectors
             n_components:
-                the number of components in eig_vec (reduced to only have 25% of total components as noise)
+                the number of retained ICA components; all components from the final fit are kept.
             project_meta:
                 The metadata for the ica projection. 'ica_fits' records each completed fit in execution order and whether convergence warning was emitted. 
             expmeta:
@@ -106,7 +106,7 @@ def project(vector: np.ndarray,
             svd_cutoff: 
                 the number of components originally decomposed
             lag1_full: 
-                the lag-1 autocorrelation of the full set of components decomposed before cropping to only 25% noise components
+                the lag-1 autocorrelation of all components from the final adaptive fit, in the same order as the returned maps and timecourses
             svd_multiplier: 
                 the svd multiplier value used to determine cutoff
     '''
@@ -203,28 +203,16 @@ def project(vector: np.ndarray,
         components['lag1_full'] = lag_n_autocorr(eig_mix.T, 1)
         components['svd_multiplier'] = svd_multiplier
 
-        print('Cropping excess noise components')
+        print('Keeping all fitted ICA components')
         components['svd_cutoff'] = n_components
-        reduced_n_components = int((noise.size - noise.sum()) * 1.25)
 
-        print('reduced_n_components:', reduced_n_components)
-
-        if reduced_n_components < n_components:
-            print('Cropping', n_components, 'to', reduced_n_components)
-
-            ev_sort = np.argsort(eig_mix.std(axis=0))
-            eig_vec = eig_vec[:, ev_sort][:, ::-1]
-            eig_mix = eig_mix[:, ev_sort][:, ::-1]
-            noise = noise[ev_sort][::-1]
-
-            eig_vec = eig_vec[:, :reduced_n_components]
-            eig_mix = eig_mix[:, :reduced_n_components]
-            n_components = reduced_n_components
-            noise = noise[:reduced_n_components]
-
-            components['lag1_full'] = components['lag1_full'][ev_sort][::-1]
-        else:
-            print('Less than 75% signal.  Not cropping excess noise.')
+        # Sort by descending timecourse standard deviation.
+        # Apply the sam eordering to maps, timecourses, and labels.
+        ev_sort = np.argsort(eig_mix.std(axis=0))[::-1]
+        eig_vec = eig_vec[:, ev_sort]
+        eig_mix = eig_mix[:, ev_sort]
+        noise = noise[ev_sort]
+        components['lag1_full'] = components['lag1_full'][ev_sort]
 
         components['noise_components'] = noise
         components['cutoff'] = cutoff
