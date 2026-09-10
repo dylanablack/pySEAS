@@ -183,6 +183,13 @@ def project(vector: np.ndarray,
             eig_mix = ica.mixing_
 
             noise, cutoff = sort_noise(eig_mix.T)
+
+            fit_info.update({
+                "noise_cutoff": float(cutoff),
+                "noise_count": int(noise.sum()),
+                "non_noise_count": int(noise.size - noise.sum()),
+                })
+
             p_signal = (1 - noise.sum() / noise.size) * 100
 
             if n_components >= rank_k:
@@ -262,6 +269,13 @@ def project(vector: np.ndarray,
                 flipped[i] = -1
                 
         noise, cutoff = sort_noise(eig_mix.T)
+
+        fit_info.update({
+            "noise_cutoff": float(cutoff),
+            "noise_count": int(noise.sum()),
+            "non_noise_count": int(noise.size - noise.sum()),
+            })
+
         components['noise_components'] = noise
         components['cutoff'] = cutoff
         components['flipped'] = flipped
@@ -328,6 +342,9 @@ def project(vector: np.ndarray,
             ('n_iter', np.int64),
             ('max_iter', np.int64),
             ('convergence_warning', np.bool_),
+            ('noise_cutoff', np.float64),
+            ('noise_count', np.int64),
+            ('non_noise_count', np.int64),
         )
     }
     
