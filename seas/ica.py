@@ -135,6 +135,8 @@ def project(vector: np.ndarray,
 
     fit_history = []
 
+    classification_history = {} # Store a separate diagnostics record for each fit.
+
     if svd_multiplier is None:
         svd_multiplier = 5
 
@@ -182,13 +184,22 @@ def project(vector: np.ndarray,
 
             eig_mix = ica.mixing_
 
-            noise, cutoff = sort_noise(eig_mix.T)
+            noise, cutoff, diagnostics = sort_noise(
+                eig_mix.T,
+                return_diagnostics=True,
+            )
 
             fit_info.update({
                 "noise_cutoff": float(cutoff),
                 "noise_count": int(noise.sum()),
                 "non_noise_count": int(noise.size - noise.sum()),
-                })
+                "kde_peak_count": diagnostics["kde_peak_count"],
+                "zero_cutoff_fallback": diagnostics["cutoff_method"] == "zero_fallback",
+            })
+
+            diagnostics["timecourse_sd"] = eig_mix.std(axis=0) # Pair each lag-1 value with its SD
+            diagnostics["component_order"] = "classification_input" # Describe the stored ordering
+            classification_history[f"fit_{len(fit_history) - 1:03d}"] = diagnostics # fit_000, fit_001, etc.
 
             p_signal = (1 - noise.sum() / noise.size) * 100
 
@@ -268,13 +279,22 @@ def project(vector: np.ndarray,
                 eig_mix[:, i] *= -1
                 flipped[i] = -1
                 
-        noise, cutoff = sort_noise(eig_mix.T)
+        noise, cutoff, diagnostics = sort_noise(
+            eig_mix.T,
+            return_diagnostics=True,
+        )
 
         fit_info.update({
             "noise_cutoff": float(cutoff),
             "noise_count": int(noise.sum()),
             "non_noise_count": int(noise.size - noise.sum()),
-            })
+            "kde_peak_count": diagnostics["kde_peak_count"],
+            "zero_cutoff_fallback": diagnostics["cutoff_method"] == "zero_fallback",
+        })
+
+        diagnostics["timecourse_sd"] = eig_mix.std(axis=0)
+        diagnostics["component_order"] = "classification_input"
+        classification_history[f"fit_{len(fit_history) - 1:03d}"] = diagnostics
 
         components['noise_components'] = noise
         components['cutoff'] = cutoff
@@ -345,9 +365,12 @@ def project(vector: np.ndarray,
             ('noise_cutoff', np.float64),
             ('noise_count', np.int64),
             ('non_noise_count', np.int64),
+            ('kde_peak_count', np.int64),
+            ('zero_cutoff_fallback', np.bool_),
         )
     }
     
+    project_meta['classification_history'] = classification_history
     components['project_meta'] = project_meta
 
     print('\n')

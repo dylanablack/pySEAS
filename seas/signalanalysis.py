@@ -11,27 +11,37 @@ def sort_noise(timecourses: np.ndarray = None,
                lag1: np.ndarray = None,
                return_logpdf: bool = False,
                method: str = 'KDE',
-               verbose: bool = False) -> Tuple[np.ndarray, int, np.ndarray]:
+               verbose: bool = False,
+               *,
+               return_diagnostics: bool = False) -> tuple:
     '''
-    Sorts timecourses into two clusters (signal and noise) based on 
-    lag-1 autocorrelation.  
+    Labels components as noise or non-noise using lag-1 autocorrelation.
 
     Arguments:
-        timecourses: Input to calculate noise threshold. 
-            Should be a np array of shape (n, t).
-        lag1: Required if the timecourses are not provided.
-            alternate input to calculate noise threshold.
-            Should be a np array of shape (n, t).
+        timecourses: Component timecourses of shape (n, t), used to calculate
+            lag-1 values when lag1 is not supplied.
+        lag1: Optional precomputed lag-1 values of shape (n,). Required when
+            timecourses is not supplied; takes precedence when both are given.
         return_logpdf: Whether to return the KDE log density function.
         method: The method to calculate the cutoff.  Currently only KDE is supported.
         verbose: Whether to record a verbose output.
+        return_diagnostics: Whether to append a dictionary containing the lag-1
+            values, KDE peak count, cutoff method, KDE grid and log density.
 
     Returns:
-        noise_components, a np array with a value of 1 where all noise 
-            timecourses detected. as well as the cutoff value detected.
-        cutoff: The cutoff index, anything above this value is considered to be noise. 
-        log_pdf: Returned only if return_logpdf is True.  
-            The pdf function evaluated between -0.2 and 1.2.
+        The tuple always starts with noise_components and cutoff:
+            noise_components: A uint8 array of shape (n,), with 1 for noise
+                and 0 for non-noise.
+            cutoff: The lag-1 threshold. Values strictly below it are labelled
+                noise. If at most one KDE peak is detected, the cutoff is zero.
+        If return_logpdf is True, log_pdf is appended: the KDE log density
+            evaluated on the grid from -0.2 to 1.2.
+        If return_diagnostics is True, diagnostics is appended last. It contains
+            lag1, kde_peak_count, cutoff_method ("zero_fallback" or "kde_valley"),
+            kde_grid and kde_logpdf.
+        Thus the tuple has two values by default, three when either flag is
+            enabled, or four when both flags are enabled, in this order:
+            (noise_components, cutoff, log_pdf, diagnostics).
     '''
     if method == 'KDE':
 
@@ -52,10 +62,12 @@ def sort_noise(timecourses: np.ndarray = None,
             if verbose:
                 print('Only one cluster found')
             cutoff = 0
+            cutoff_method = "zero_fallback" # Record why zero was selected.
         else:
             cutoff_index = np.argmin(np.exp(log_pdf)[maxima[0]:maxima[-1]]) \
                 + maxima[0]
             cutoff = x_grid[cutoff_index]
+            cutoff_method = "kde_valley" # Record that the threshold came from the KDE valley.
             if verbose:
                 print('autocorr cutoff:', cutoff)
 
@@ -63,11 +75,22 @@ def sort_noise(timecourses: np.ndarray = None,
     else:
         raise Exception('method: {0} is unknown!'.format(method))
 
-    if return_logpdf:
-        return noise_components, cutoff, log_pdf
-    else:
-        return noise_components, cutoff
+    result = (noise_components, cutoff) # Preserve the existing default return
 
+    if return_logpdf: # Preserve the GUI's existing three-value return.
+        result += (log_pdf,)
+
+    if return_diagnostics: # Include extra information only when requested.
+        diagnostics = {
+            "lag1": lag1.copy(), # Retain each component's autocorrelation.
+            "kde_peak_count": int(maxima.size), # Record how many peaks were detected.
+            "cutoff_method": cutoff_method, # Return the actual decision branch.
+            "kde_grid": x_grid.copy(), # Retain the horizontal coordinates.
+            "kde_logpdf": log_pdf.copy(), # Retain the fitted distribution.
+        }
+        result += (diagnostics,)
+
+    return result
 
 def get_peak_separation(log_pdf: np.ndarray,
                         x_grid: np.ndarray = None) -> float:
