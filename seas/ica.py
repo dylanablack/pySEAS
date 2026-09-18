@@ -14,8 +14,27 @@ from seas.signalanalysis import butterworth, sort_noise, lag_n_autocorr
 from seas.hdf5manager import hdf5manager
 from seas.video import rotate, save, rescale, play, scale_video
 
+def _stage_start(label):
+    print(
+        f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] "
+        f"START {label}",
+        flush=True,
+    )
+    return timer()
+
+def _stage_end(label, started):
+    elapsed = timer() - started
+    print(
+        f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] "
+        f"END {label} | elapsed={elapsed:.1f} s "
+        f"({elapsed / 3600:.3f} h)",
+        flush=True,
+    )
+
 def _fit_ica_with_info(ica, vector):
     """Fit ICA and record iteration and convergence information."""
+    label = f"ICA fit, n_components={ica.n_components}"
+    fit_started = _stage_start(label)
     caught = []
     try:
         with warnings.catch_warnings(record=True) as caught:
@@ -36,7 +55,14 @@ def _fit_ica_with_info(ica, vector):
             for w in caught
         ),
     }
-    
+    _stage_end(label, fit_started)
+    print(
+        f"FIT RESULT | n_iter={info['n_iter']} "
+        f"| max_iter={info['max_iter']} "
+        f"| convergence_warning={info['convergence_warning']}",
+        flush=True,
+    )
+
     return eig_vec, info
 
 def project(vector: np.ndarray,
@@ -147,6 +173,9 @@ def project(vector: np.ndarray,
         print('Calculating ICA (with n_component SVD estimator)...')
 
         t0 = timer()
+        svd_started = _stage_start(
+            f"initial SVD, shape={vector.shape}, dtype={vector.dtype}"
+        )
         try:
             u, ev, _ = np.linalg.svd(vector, full_matrices=False)
         except ValueError:
@@ -154,6 +183,7 @@ def project(vector: np.ndarray,
             u, ev, _ = linalg.svd(vector,
                                   full_matrices=False,
                                   lapack_driver='gesvd')
+        _stage_end("initial SVD", svd_started)
 
         components['svd_eigval'] = ev
 
