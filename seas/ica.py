@@ -2,8 +2,12 @@ import os
 import re
 import numpy as np
 import warnings
+import hashlib
+import tempfile
+import h5py
 from datetime import datetime
 from sklearn.decomposition import FastICA
+from sklearn import __version__ as sklearn_version
 from scipy import linalg
 from timeit import default_timer as timer
 from typing import Tuple
@@ -65,13 +69,64 @@ def _fit_ica_with_info(ica, vector):
 
     return eig_vec, info
 
+def _fit_history_arrays(history):
+    return {key: np.asarray([record[key] for record in history])
+            for key in history[0]}
+
+
+def _input_fingerprint(vector, shape, roimask):
+    digest = hashlib.sha256(str(tuple(shape)).encode())
+    for array in (vector, roimask):
+        if array is None:
+            digest.update(b'None')
+            continue
+        array = np.asarray(array)
+        digest.update(str((array.shape, array.dtype.str)).encode())
+        rows = max(1, (16 * 1024**2) // max(1, array[0].nbytes))
+        for start in range(0, array.shape[0], rows):
+            digest.update(np.ascontiguousarray(array[start:start + rows]).tobytes())
+    return digest.hexdigest()
+
+
+def _save_ica_checkpoint(path, data):
+    def check_written(group, expected):
+        for key, value in expected.items():
+            if key not in group and key not in group.attrs:
+                raise OSError(f'Incomplete checkpoint: missing {group.name}/{key}')
+            if isinstance(value, dict):
+                check_written(group[key], value)
+            elif isinstance(value, np.ndarray) and group[key].shape != value.shape:
+                raise OSError(f'Incomplete checkpoint array: {group.name}/{key}')
+
+    path = os.path.abspath(os.fspath(path))
+    fd, temporary = tempfile.mkstemp(suffix='.hdf5', dir=os.path.dirname(path))
+    os.close(fd)
+    manager = hdf5manager(temporary)
+    try:
+        manager.save(data)
+        with h5py.File(temporary, 'r') as saved:
+            check_written(saved, data)
+        with open(temporary, 'rb') as saved:
+            os.fsync(saved.fileno())
+        os.replace(temporary, path)
+    finally:
+        if hasattr(manager, 'f'):
+            manager.f.close()
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f'Saved ICA checkpoint: {path}', flush=True)
+
+
 def project(vector: np.ndarray,
             shape: Tuple[int, int, int],
             roimask: np.ndarray = None,
             n_components: int = None,
             svd_multiplier: float = 5,
             calc_residuals: bool = True,
-            max_iter: int = 3000):
+            max_iter: int = 3000,
+            checkpoint_path: str = None,
+            growth_policy: str = 'auto',
+            resume_from: str = None):
     '''
     Apply an ica decomposition to the first axis of the input vector.  
     If a roimask is provided, the flattened roimask will be used to crop the vector before decomposition.
@@ -98,6 +153,20 @@ def project(vector: np.ndarray,
             Whether to calculate spatial and temporal residuals of projection compression.
         max_iter:
             Maximum iterations assigned for FastICA
+        checkpoint_path:
+            Adaptive fits only. Save each completed fit to this HDF5 path,
+            replacing the previous checkpoint atomically. Parent must exist.
+            Checkpoint maps/timecourses use classification-input order.
+        growth_policy:
+            'auto': allow adaptive growth. 'review': stop before growth when
+            KDE peak count is not two (status='review_required'). 'manual':
+            stop before every increase (status='growth_paused'). Non-auto
+            policies require checkpoint_path. Normal stopping rules still apply.
+        resume_from:
+            Explicitly continue growth from an adaptive checkpoint. Supply the
+            same input, mask, svd_multiplier and max_iter. Recomputes the SVD
+            and starts at the saved next count, preserving fit history.
+            This is a new fit, not continuation of previous ICA iterations.
 
     Returns:
         components: A dictionary containing all the results, metadata, and information regarding the filter applied.
@@ -141,6 +210,44 @@ def project(vector: np.ndarray,
         'vector was not a two-dimensional np array.'
         'If input is a movie, be sure to convert shape to (xy, t)')
 
+    if svd_multiplier is None:
+        svd_multiplier = 5
+    if growth_policy not in ('auto', 'review', 'manual'):
+        raise ValueError("growth_policy must be 'auto', 'review' or 'manual'")
+    if n_components is not None and (checkpoint_path or resume_from or growth_policy != 'auto'):
+        raise ValueError('Checkpoint/review/resume options require adaptive n_components=None')
+    if growth_policy != 'auto' and checkpoint_path is None:
+        raise ValueError('Non-auto growth_policy requires checkpoint_path')
+    if checkpoint_path is not None:
+        checkpoint_path = os.path.abspath(os.fspath(checkpoint_path))
+        if not checkpoint_path.endswith('.hdf5'):
+            raise ValueError('checkpoint_path must end in .hdf5')
+        if not os.path.isdir(os.path.dirname(checkpoint_path)):
+            raise ValueError('Checkpoint parent directory must already exist')
+        if os.path.exists(checkpoint_path) and (
+                resume_from is None or checkpoint_path != os.path.abspath(os.fspath(resume_from))):
+            raise FileExistsError('Use a fresh checkpoint path or explicitly resume this checkpoint')
+
+    resume_meta = None
+    run_state = None
+    if checkpoint_path is not None or resume_from is not None:
+        run_state = {
+            'schema_version': 1,
+            'input_sha256': _input_fingerprint(vector, shape, roimask),
+            'max_iter': int(max_iter),
+            'svd_multiplier': float(svd_multiplier),
+            'numpy_version': np.__version__,
+            'sklearn_version': sklearn_version,
+        }
+    if resume_from is not None:
+        resume_meta = hdf5manager(os.fspath(resume_from), create=False).load(
+            target=['project_meta'])
+        previous = resume_meta['adaptive_resume']
+        if any(previous.get(key) != value for key, value in run_state.items()):
+            raise ValueError('Resume input, mask, settings or library versions do not match')
+        if previous['next_n_components'] <= 0:
+            raise ValueError('Checkpoint has no pending adaptive growth')
+
     if roimask is not None:
         print('Using roimask to crop video')
         assert roimask.size == vector.shape[0], \
@@ -163,8 +270,8 @@ def project(vector: np.ndarray,
 
     classification_history = {} # Store a separate diagnostics record for each fit.
 
-    if svd_multiplier is None:
-        svd_multiplier = 5
+    status = 'fixed_count'
+    next_n_components = 0
 
     if vector.dtype == np.float16:
         vector = vector.astype('float32', copy=False)
@@ -198,6 +305,19 @@ def project(vector: np.ndarray,
         n_components = min(n_components, rank_k)
 
         components['increased_cutoff'] = 0
+        if resume_meta is not None:
+            previous = resume_meta['adaptive_resume']
+            n_components = int(previous['next_n_components'])
+            if not previous['completed_n_components'] < n_components <= rank_k:
+                raise ValueError('Invalid next component count in checkpoint')
+            stored_fits = resume_meta['ica_fits']
+            fit_history = [
+                {key: values[i].item() for key, values in stored_fits.items()}
+                for i in range(len(stored_fits['n_components']))
+            ]
+            classification_history = resume_meta['classification_history']
+            components['increased_cutoff'] = int(previous['increased_cutoff']) + 1
+            print(f'Resuming adaptive ICA at {n_components} components', flush=True)
 
         while True:
             print('\nCalculating ICA with', n_components, 'components...')
@@ -232,6 +352,48 @@ def project(vector: np.ndarray,
             classification_history[f"fit_{len(fit_history) - 1:03d}"] = diagnostics # fit_000, fit_001, etc.
 
             p_signal = (1 - noise.sum() / noise.size) * 100
+            review_required = diagnostics['kde_peak_count'] != 2
+            fit_info['review_required'] = review_required
+            if review_required:
+                print(f'REVIEW: {diagnostics["kde_peak_count"]} KDE peaks; '
+                      f'cutoff={cutoff:.6g}; signal={p_signal:.2f}%', flush=True)
+
+            grow = n_components < rank_k and p_signal >= 75
+            next_n_components = min(n_components + max(1, n_components // 2), rank_k) if grow else 0
+            if not grow:
+                status = 'rank_cap' if n_components >= rank_k else 'signal_fraction'
+            elif growth_policy == 'manual':
+                status = 'growth_paused'
+            elif growth_policy == 'review' and review_required:
+                status = 'review_required'
+            else:
+                status = 'ready_to_grow'
+            if run_state is not None:
+                run_state.update(completed_n_components=n_components,
+                                 next_n_components=next_n_components,
+                                 increased_cutoff=components['increased_cutoff'])
+            if checkpoint_path is not None:
+                snapshot = dict(components)
+                snapshot.update(
+                    eig_vec=eig_vec, eig_mix=eig_mix, timecourses=eig_mix.T,
+                    n_components=n_components, noise_components=noise, cutoff=cutoff,
+                    lag1=diagnostics['lag1'], lag1_full=diagnostics['lag1'],
+                    svd_cutoff=n_components, svd_multiplier=svd_multiplier,
+                    project_meta={
+                        'status': status, 'review_required': review_required,
+                        'growth_policy': growth_policy,
+                        'component_order': 'classification_input',
+                        'n_components': n_components, 'time_elapsed': timer() - t0,
+                        'ica_fits': _fit_history_arrays(fit_history),
+                        'classification_history': classification_history,
+                        'adaptive_resume': dict(run_state),
+                    },
+                )
+                _save_ica_checkpoint(checkpoint_path, snapshot)
+                del snapshot
+            if status in ('review_required', 'growth_paused'):
+                print(f'Stopped before growth ({status}); returning current fit.', flush=True)
+                break
 
             if n_components >= rank_k:
                 print('Reached the SVD rank cap; using this decomposition...')
@@ -242,10 +404,7 @@ def project(vector: np.ndarray,
             else:
                 print('ICA components were over 75% signal ({0}% signal.)'.format(p_signal))
                 print('Recalculating with more components...')
-                n_components = min(
-                    n_components + max(1, n_components // 2),
-                    rank_k,
-                )
+                n_components = next_n_components
                 components['increased_cutoff'] += 1
 
         components['lag1_full'] = lag_n_autocorr(eig_mix.T, 1)
@@ -320,7 +479,11 @@ def project(vector: np.ndarray,
             "non_noise_count": int(noise.size - noise.sum()),
             "kde_peak_count": diagnostics["kde_peak_count"],
             "zero_cutoff_fallback": diagnostics["cutoff_method"] == "zero_fallback",
+            "review_required": diagnostics["kde_peak_count"] != 2,
         })
+        if fit_info['review_required']:
+            print(f'REVIEW: {diagnostics["kde_peak_count"]} KDE peaks; '
+                  f'cutoff={cutoff:.6g}; signal={100 * (1 - noise.mean()):.2f}%', flush=True)
 
         diagnostics["timecourse_sd"] = eig_mix.std(axis=0)
         diagnostics["component_order"] = "classification_input"
@@ -382,23 +545,13 @@ def project(vector: np.ndarray,
         datetime.now().strftime(fmt)
     project_meta['n_components'] = n_components
     
-    project_meta['ica_fits'] = {
-        key: np.asarray(
-            [record[key] for record in fit_history],
-            dtype=dtype,
-        )
-        for key, dtype in (
-            ('n_components', np.int64),
-            ('n_iter', np.int64),
-            ('max_iter', np.int64),
-            ('convergence_warning', np.bool_),
-            ('noise_cutoff', np.float64),
-            ('noise_count', np.int64),
-            ('non_noise_count', np.int64),
-            ('kde_peak_count', np.int64),
-            ('zero_cutoff_fallback', np.bool_),
-        )
-    }
+    project_meta['ica_fits'] = _fit_history_arrays(fit_history)
+    project_meta['status'] = status
+    project_meta['growth_policy'] = growth_policy
+    project_meta['review_required'] = fit_history[-1]['review_required']
+    project_meta['component_order'] = 'descending_timecourse_sd'
+    if run_state is not None:
+        project_meta['adaptive_resume'] = dict(run_state)
     
     project_meta['classification_history'] = classification_history
     components['project_meta'] = project_meta
