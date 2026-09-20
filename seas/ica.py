@@ -6,7 +6,6 @@ import hashlib
 import tempfile
 import h5py
 from datetime import datetime
-from sklearn.decomposition import FastICA
 from sklearn import __version__ as sklearn_version
 from scipy import linalg
 from timeit import default_timer as timer
@@ -16,6 +15,7 @@ from sklearn.exceptions import ConvergenceWarning
 from seas.waveletAnalysis import waveletAnalysis
 from seas.signalanalysis import butterworth, sort_noise, lag_n_autocorr
 from seas.hdf5manager import hdf5manager
+from seas.ica_solvers import make_solver, solver_settings
 from seas.video import rotate, save, rescale, play, scale_video
 
 def _stage_start(label):
@@ -70,8 +70,10 @@ def _fit_ica_with_info(ica, vector):
     return eig_vec, info
 
 def _fit_history_arrays(history):
-    return {key: np.asarray([record[key] for record in history])
-            for key in history[0]}
+    arrays = {key: np.asarray([record[key] for record in history])
+              for key in history[0]}
+    return {key: value.astype('S') if value.dtype.kind == 'U' else value
+            for key, value in arrays.items()}
 
 
 def _input_fingerprint(vector, shape, roimask):
@@ -126,7 +128,9 @@ def project(vector: np.ndarray,
             max_iter: int = 3000,
             checkpoint_path: str = None,
             growth_policy: str = 'auto',
-            resume_from: str = None):
+            resume_from: str = None,
+            solver: str = 'fastica',
+            tol: float = None):
     '''
     Apply an ica decomposition to the first axis of the input vector.  
     If a roimask is provided, the flattened roimask will be used to crop the vector before decomposition.
@@ -152,7 +156,12 @@ def project(vector: np.ndarray,
         calc_residuals:
             Whether to calculate spatial and temporal residuals of projection compression.
         max_iter:
-            Maximum iterations assigned for FastICA
+            Maximum iterations assigned to the selected solver.
+        solver:
+            'fastica' (default) or 'picard-o' (requires python-picard).
+        tol:
+            Solver-specific stopping tolerance. Defaults: FastICA 1e-4,
+            Picard-O 1e-7. Equal values do not imply equal convergence accuracy.
         checkpoint_path:
             Adaptive fits only. Save each completed fit to this HDF5 path,
             replacing the previous checkpoint atomically. Parent must exist.
@@ -212,6 +221,8 @@ def project(vector: np.ndarray,
 
     if svd_multiplier is None:
         svd_multiplier = 5
+    settings = solver_settings(solver, tol)
+    print(f'ICA solver: {solver}; tolerance={settings["tol"]:g}', flush=True)
     if growth_policy not in ('auto', 'review', 'manual'):
         raise ValueError("growth_policy must be 'auto', 'review' or 'manual'")
     if n_components is not None and (checkpoint_path or resume_from or growth_policy != 'auto'):
@@ -238,11 +249,16 @@ def project(vector: np.ndarray,
             'svd_multiplier': float(svd_multiplier),
             'numpy_version': np.__version__,
             'sklearn_version': sklearn_version,
+            **settings,
         }
     if resume_from is not None:
         resume_meta = hdf5manager(os.fspath(resume_from), create=False).load(
             target=['project_meta'])
         previous = resume_meta['adaptive_resume']
+        # Pre-selector checkpoints were necessarily the original FastICA setup.
+        if 'solver' not in previous:
+            previous = dict(previous, solver='fastica',
+                            solver_version=previous['sklearn_version'], tol=1e-4)
         if any(previous.get(key) != value for key, value in run_state.items()):
             raise ValueError('Resume input, mask, settings or library versions do not match')
         if previous['next_n_components'] <= 0:
@@ -312,7 +328,8 @@ def project(vector: np.ndarray,
                 raise ValueError('Invalid next component count in checkpoint')
             stored_fits = resume_meta['ica_fits']
             fit_history = [
-                {key: values[i].item() for key, values in stored_fits.items()}
+                {**{key: values[i].item() for key, values in stored_fits.items()},
+                 **settings}
                 for i in range(len(stored_fits['n_components']))
             ]
             classification_history = resume_meta['classification_history']
@@ -323,13 +340,10 @@ def project(vector: np.ndarray,
             print('\nCalculating ICA with', n_components, 'components...')
 
             w_init = u[:n_components, :n_components].astype('float64')
-            ica = FastICA(n_components=n_components,
-                          max_iter=max_iter,
-                          random_state=1000,
-                          w_init=w_init,
-                          whiten_solver="eigh") # call eigh rather than default
+            ica = make_solver(solver, n_components, max_iter, settings['tol'], w_init)
 
             eig_vec, fit_info = _fit_ica_with_info(ica, vector)
+            fit_info.update(settings)
             fit_history.append(fit_info)
 
             eig_mix = ica.mixing_
@@ -387,6 +401,7 @@ def project(vector: np.ndarray,
                         'ica_fits': _fit_history_arrays(fit_history),
                         'classification_history': classification_history,
                         'adaptive_resume': dict(run_state),
+                        **settings,
                     },
                 )
                 _save_ica_checkpoint(checkpoint_path, snapshot)
@@ -430,10 +445,7 @@ def project(vector: np.ndarray,
         print('Calculating ICA (' + str(n_components) + ' components)...')
 
         t0 = timer()
-        ica = FastICA(n_components=n_components,
-                      max_iter=max_iter,
-                      random_state=1000,
-                      whiten_solver="eigh")
+        ica = make_solver(solver, n_components, max_iter, settings['tol'])
 
         try:
             eig_vec, fit_info = _fit_ica_with_info(ica, vector)  # Eigenbrains
@@ -446,6 +458,7 @@ def project(vector: np.ndarray,
                 ica, vector.astype('float64')
             )
 
+        fit_info.update(settings)
         fit_history.append(fit_info)
 
         t = timer() - t0
@@ -550,6 +563,7 @@ def project(vector: np.ndarray,
     project_meta['growth_policy'] = growth_policy
     project_meta['review_required'] = fit_history[-1]['review_required']
     project_meta['component_order'] = 'descending_timecourse_sd'
+    project_meta.update(settings)
     if run_state is not None:
         project_meta['adaptive_resume'] = dict(run_state)
     

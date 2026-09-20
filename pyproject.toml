@@ -30,6 +30,9 @@ dependencies = [
     "tk",
 ]
 
+[project.optional-dependencies]
+picard = ["python-picard==0.8.2"]
+
 [project.urls]
 "Homepage" = "https://github.com/ackmanlab/pySEAS"
 "Bug Tracker" = "https://github.com/ackmanlab/pySEAS/issues"
